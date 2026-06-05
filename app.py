@@ -45,7 +45,7 @@ def get_live_data():
 
 # --- 網頁主畫面 ---
 st.title("📊 自動化資產再平衡計算器")
-st.write(f"設定總資產規模：{TOTAL_BUDGET:,} 元台幣 | 目標比例：40% : 40% : 20%")
+#st.write(f"設定總資產規模：{TOTAL_BUDGET:,} 元台幣 | 目標比例：40% : 40% : 20%")
 
 st.subheader("🚀 即時資產狀態 (自動更新)")
 
