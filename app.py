@@ -24,22 +24,26 @@ def save_data(shares):
     with open(DATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(shares, f, ensure_ascii=False, indent=4)
 
-# 獲取即時市價與匯率
-def get_live_data():
+# 逐一獲取即時市價與匯率（確保穩定度）
+def get_single_ticker_price(ticker_symbol):
     try:
-        # 抓取台股、美股與匯率
-        tickers = ["00713.TW", "VOO", "SMH", "TWD=X"]
-        data = yf.download(tickers, period="1d")['Close'].iloc[-1]
-        
-        return {
-            "00713": float(data["00713.TW"]),
-            "VOO": float(data["VOO"]),
-            "SMH": float(data["SMH"]),
-            "fx": float(data["TWD=X"])
-        }
+        ticker = yf.Ticker(ticker_symbol)
+        # 抓取最新一筆歷史股價
+        df = ticker.history(period="1d")
+        if not df.empty:
+            return float(df['Close'].iloc[-1])
+        # 如果 history 空了，嘗試用 fast_info
+        return float(ticker.fast_info['last_price'])
     except Exception as e:
-        st.error(f"無法取得即時股價，錯誤訊息: {e}")
         return None
+
+def get_live_data():
+    prices = {}
+    prices["00713"] = get_single_ticker_price("00713.TW")
+    prices["VOO"] = get_single_ticker_price("VOO")
+    prices["SMH"] = get_single_ticker_price("SMH")
+    prices["fx"] = get_single_ticker_price("TWD=X")
+    return prices
 
 # 讀取歷史資料
 user_shares = load_data()
@@ -80,9 +84,10 @@ if user_shares is not None:
             
     live_data = st.session_state.get('live_prices')
     
-    if live_data:
+    # 檢查是否有任何一檔資料抓取失敗
+    if live_data and all(v is not None for v in live_data.values()):
         usd_to_twd = live_data["fx"]
-        st.info(f" 💡 偵測到當前美金兌台幣匯率：**{usd_to_twd:.2f}**")
+        st.info(f"💡 偵測到當前美金兌台幣匯率：**{usd_to_twd:.2f}**")
         
         current_prices = {"00713": live_data["00713"], "VOO": live_data["VOO"], "SMH": live_data["SMH"]}
         raw_values = {k: user_shares[k] * current_prices[k] for k in TARGET_RATIOS.keys()}
@@ -125,3 +130,7 @@ if user_shares is not None:
             st.warning("💡 **再平衡建議**：部分資產已偏離目標配置（超過 ±2%）。建議您可以調整回黃金比例。")
         else:
             st.success("💡 **再平衡建議**：目前各資產比例都在理想範圍內，繼續保持！")
+    else:
+        st.error("⚠️ 暫時無法取得完整股價資訊，請稍候幾秒再按一次『重新整理並計算』。")
+else:
+    st.info("請先在上方的『初始投資金額設定』中儲存您的資產配置。")
