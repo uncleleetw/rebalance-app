@@ -1,0 +1,31 @@
+name: Daily Portfolio Rebalance Check
+
+on:
+  schedule:
+    # 這是國際標準時間 (UTC) 10:00，換算台灣時間就是每天下午 18:00 自動執行
+    - cron: '0 10 * * *'
+  workflow_dispatch: # 允許我們在網頁上手動點擊按鈕測試
+
+jobs:
+  check-portfolio:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 複製儲存庫代碼
+      uses: actions/checkout@v3
+
+    - name: 設定 Python 環境
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: 安裝必要套件
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests yfinance
+
+    - name: 執行自動再平衡檢查並發送通知
+      env:
+        LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+        LINE_USER_ID: "${{ secrets.LINE_USER_ID }}"
+      run: python cron_check.py
