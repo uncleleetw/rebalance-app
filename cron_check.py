@@ -6,8 +6,8 @@ import yfinance as yf
 def get_rebalance_report():
     # 1. 固定輸入李主任目前的精準在庫持股數
     shares_00713 = 10153
-    shares_voo = 25
-    shares_smh = 18
+    shares_voo = 28
+    shares_smh = 15
     
     # 2. 設定原始大盤資產配置目標比例
     target_00713_ratio = 0.40
