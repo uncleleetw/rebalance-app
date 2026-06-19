@@ -1,154 +1,218 @@
 import os
+import json
 import datetime
 import requests
 import yfinance as yf
 
 def get_rebalance_report():
-    # 1. 固定輸入李主任目前的精準在庫持股數
+    # =========================================================================
+    # 📌 【1. 核心輸入區】請在此維持或更新李主任的精準在庫持股數與目標比例
+    # =========================================================================
     shares_00713 = 10153
     shares_voo = 25
     shares_smh = 18
-    
-    # 2. 設定原始大盤資產配置目標比例
-    target_00713_ratio = 0.40
-    target_voo_ratio = 0.40
-    target_smh_ratio = 0.20
-    
-    # 3. 透過 yfinance 抓取台美股最新收盤價與匯率
+
+    # 您的黃金配置目標比例 (總和必為 100%)
+    target_00713 = 0.40
+    target_voo = 0.35
+    target_smh = 0.25
+
+    # =========================================================================
+    # 📌 【2. 數據獲取與緩衝區】下載 6 天歷史（確保涵蓋 5 個交易日漲跌幅）
+    # =========================================================================
     try:
-        price_00713 = yf.Ticker("00713.TW").history(period="1d")['Close'].iloc[-1]
-        price_voo = yf.Ticker("VOO").history(period="1d")['Close'].iloc[-1]
-        price_smh = yf.Ticker("SMH").history(period="1d")['Close'].iloc[-1]
-        
-        # 抓取美金兌台幣最新匯率，以便整合計算總資產
-        usdtwd = yf.Ticker("TWD=X").history(period="1d")['Close'].iloc[-1]
+        tickers = ["00713.TW", "VOO", "SMH", "TWD=X"]
+        df = yf.download(tickers, period="8d", progress=False)
+        if df.empty or 'Close' not in df:
+            raise Exception("Yahoo Finance API 讀取失敗")
+            
+        close_df = df['Close']
+        p_00713 = float(close_df['00713.TW'].dropna().iloc[-1])
+        p_voo = float(close_df['VOO'].dropna().iloc[-1])
+        p_smh = float(close_df['SMH'].dropna().iloc[-1])
+        usd_to_twd = float(close_df['TWD=X'].dropna().iloc[-1])
     except Exception as e:
-        return f"❌ 數據擷取失敗，原因: {str(e)}"
-        
-    # 4. 計算各資產目前的台幣市值與總資產
-    value_00713_twd = shares_00713 * price_00713
-    value_voo_twd = shares_voo * price_voo * usdtwd
-    value_smh_twd = shares_smh * price_smh * usdtwd
-    
-    total_assets_twd = value_00713_twd + value_voo_twd + value_smh_twd
-    
-    # 5. 計算目前的實際資產比例
-    actual_00713_ratio = value_00713_twd / total_assets_twd
-    actual_voo_ratio = value_voo_twd / total_assets_twd
-    actual_smh_ratio = value_smh_twd / total_assets_twd
-    
-    # 6. 獨立計算美股海外部位的內部再平衡股數與預估交割差價
-    total_us_value_usd = (shares_voo * price_voo) + (shares_smh * price_smh)
-    
-    # 根據 40% : 20% 的權重分配，VOO 應佔美股內部的 2/3，SMH 應佔 1/3
-    target_voo_value_usd = total_us_value_usd * (target_voo_ratio / (target_voo_ratio + target_smh_ratio))
-    target_smh_value_usd = total_us_value_usd * (target_smh_ratio / (target_voo_ratio + target_smh_ratio))
-    
-    # 計算美金價值差距
-    voo_diff_usd = target_voo_value_usd - (shares_voo * price_voo)
-    smh_diff_usd = target_smh_value_usd - (shares_smh * price_smh)
-    
-    # 換算成建議交易股數 (四捨五入取整數)
-    voo_suggest_shares = round(voo_diff_usd / price_voo)
-    smh_suggest_shares = round(smh_diff_usd / price_smh)
-    
-    # 計算買賣應補/應退差價 (買進花費減去賣出收入)
-    # 若為正值代表買大於賣，需要補現金；若為負值代表賣大於買，會多出閒置現金
-    buy_voo_cost_usd = abs(voo_suggest_shares) * price_voo if voo_suggest_shares > 0 else 0
-    sell_smh_revenue_usd = abs(smh_suggest_shares) * price_smh if smh_suggest_shares < 0 else 0
-    
-    buy_smh_cost_usd = abs(smh_suggest_shares) * price_smh if smh_suggest_shares > 0 else 0
-    sell_voo_revenue_usd = abs(voo_suggest_shares) * price_voo if voo_suggest_shares < 0 else 0
-    
-    if (smh_suggest_shares < 0 and voo_suggest_shares > 0): # 賣 SMH 買 VOO
-        est_gap_usd = buy_voo_cost_usd - sell_smh_revenue_usd
-    elif (voo_suggest_shares < 0 and smh_suggest_shares > 0): # 賣 VOO 買 SMH
-        est_gap_usd = buy_smh_cost_usd - sell_voo_revenue_usd
-    else:
-        est_gap_usd = 0
-        
-    est_gap_twd = est_gap_usd * usdtwd
-    
-    # 7. 判定是否觸發 2% 閾值的警報文字與狀態顯示
-    def check_status(actual, target):
-        diff = actual - target
-        if abs(diff) > 0.02:
-            return f"{actual*100:.1f}% ({target*100:.0f}%) -> 偏離 {diff*100:+.1f}% ⚠️"
-        return f"{actual*100:.1f}% ({target*100:.0f}%) -> 安全 🟢"
+        return f"❌ 系統錯誤：無法取得即時市場價格，再平衡計算中止。\n原因: {str(e)}"
 
-    status_00713 = check_status(actual_00713_ratio, target_00713_ratio)
-    status_voo = check_status(actual_voo_ratio, target_voo_ratio)
-    status_smh = check_status(actual_smh_ratio, target_smh_ratio)
-    
-    # 8. 校正台灣時區 (手動加上 8 小時)
+    # 計算 5 日變動率 (最新收盤相較於 5 個交易日前)
+    def calc_5d_pct(ticker_name):
+        try:
+            series = close_df[ticker_name].dropna()
+            if len(series) >= 6:
+                pct = ((series.iloc[-1] - series.iloc[-6]) / series.iloc[-6]) * 100
+                return f"{'+' if pct >= 0 else ''}{pct:.1f}%"
+        except:
+            pass
+        return "暫無數據"
+
+    pct_00713 = calc_5d_pct('00713.TW')
+    pct_voo = calc_5d_pct('VOO')
+    pct_smh = calc_5d_pct('SMH')
+
+    # =========================================================================
+    # 📌 【3. 00713 除息日智慧判定機制】
+    # =========================================================================
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
-    current_time = taiwan_time.strftime("%Y-%m-%d %H:%M")
+    is_ex_dividend_day = False
     
-    # 建立調整建議與差價結算區塊文字
-    trade_advice_text = ""
-    gap_info = ""
-    if est_gap_usd > 0:
-        gap_info = f"💰 本次調整預估【需補交割款】: {est_gap_usd:.2f} 美元 (約 NT$ {est_gap_twd:,.0f} 元)"
-    elif est_gap_usd < 0:
-        gap_info = f"💰 本次調整預估【將多出退款】: {abs(est_gap_usd):.2f} 美元 (約 NT$ {abs(est_gap_twd):,.0f} 元)"
-    else:
-        gap_info = "💰 本次調整預估【零摩擦免補錢】"
+    try:
+        t_00713 = yf.Ticker("00713.TW")
+        divs = t_00713.dividends
+        if not divs.empty:
+            # 檢查過去 3 天內或今天是否有除息紀錄
+            latest_div_date = divs.index[-1].date()
+            today_date = taiwan_time.date()
+            days_diff = (today_date - latest_div_date).days
+            if 0 <= days_diff <= 2:
+                is_ex_dividend_day = True
+    except:
+        # 若 API 異常，採用歷史常規除息月份（3, 6, 9, 12月中旬）作為防禦性概算判定
+        if taiwan_time.month in [3, 6, 9, 12] and 15 <= taiwan_time.day <= 20:
+            is_ex_dividend_day = True
 
-    if smh_suggest_shares < 0 and voo_suggest_shares > 0:
-        trade_advice_text = (
-            f"🔄 【美股內部再平衡一鍵指引】\n"
-            f"👉 進入複委託券商，【賣出】 SMH : {abs(smh_suggest_shares)} 股\n"
-            f"👉 賣出資金直接，【買進】 VOO : {voo_suggest_shares} 股\n"
-            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-            f"{gap_info}"
-        )
-    elif smh_suggest_shares > 0 and voo_suggest_shares < 0:
-        trade_advice_text = (
-            f"🔄 【美股內部再平衡一鍵指引】\n"
-            f"👉 進入複委託券商，【賣出】 VOO : {abs(voo_suggest_shares)} 股\n"
-            f"👉 賣出資金直接，【買進】 SMH : {smh_suggest_shares} 股\n"
-            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-            f"{gap_info}"
-        )
-    else:
-        trade_advice_text = "🔄 【美股內部再平衡一鍵指引】\n🟢 目前海外部位權重極為平衡，無需手動調整股數。"
+    # =========================================================================
+    # 📌 【4. 資產價值與精算核心（維持原有 Double Check 驗算）】
+    # =========================================================================
+    v_00713 = shares_00713 * p_00713
+    v_voo = shares_voo * p_voo * usd_to_twd
+    v_smh = shares_smh * p_smh * usd_to_twd
+    total_portfolio_value = v_00713 + v_voo + v_smh
 
+    act_00713 = v_00713 / total_portfolio_value
+    act_voo = v_voo / total_portfolio_value
+    act_smh = v_smh / total_portfolio_value
+
+    dev_00713 = (act_00713 - target_00713) * 100
+    dev_voo = (act_voo - target_voo) * 100
+    dev_smh = (act_smh - target_smh) * 100
+
+    # =========================================================================
+    # 📌 【5. 偏離度閾值判定與偏離原因歸因】
+    # =========================================================================
+    def judge_deviation(dev_val, pct_5d, is_00713=False):
+        if is_00713 and is_ex_dividend_day:
+            return "🟢 正常 (除息日保護保護中)", "今日為00713除息，比例變化為正常現象，暫不計入偏離判斷", False
+            
+        abs_dev = abs(dev_val)
+        if abs_dev > 5.0:
+            reason = "主因為股價劇烈上漲被動稀釋" if (dev_val * (1 if float(pct_5d.replace('%',''))>=0 else -1)) > 0 else "真實資金配置失衡"
+            return f"🔴 建議調整 (偏離 {dev_val:+.1f}%)", f"近5日漲跌: {pct_5d}，{reason}", True
+        elif abs_dev > 2.0:
+            return f"⚠️ 觀察中 (偏離 {dev_val:+.1f}%)", f"近5日漲跌: {pct_5d}，常規市場波動", False
+        else:
+            return f"🟢 正常 (偏離 {dev_val:+.1f}%)", "資產比例高度契合目標", False
+
+    status_00713, note_00713, trigger_00713 = judge_deviation(dev_00713, pct_00713, is_00713=True)
+    status_voo, note_voo, trigger_voo = judge_deviation(dev_voo, pct_voo)
+    status_smh, note_smh, trigger_smh = judge_deviation(dev_smh, pct_smh)
+
+    any_trigger = trigger_00713 or trigger_voo or trigger_smh
+
+    # =========================================================================
+    # 📌 【6. 具體調整股數與所需交割金額計算】
+    # =========================================================================
+    def calc_trade(target_ratio, actual_value, current_price, is_usd=False):
+        target_value = total_portfolio_value * target_ratio
+        diff_twd = target_value - actual_value
+        price_twd = current_price * (usd_to_twd if is_usd else 1)
+        trade_shares = round(diff_twd / price_twd)
+        actual_trade_twd = trade_shares * price_twd
+        return trade_shares, actual_trade_twd
+
+    t_shares_00713, t_cost_00713 = calc_trade(target_00713, v_00713, p_00713)
+    t_shares_voo, t_cost_voo = calc_trade(target_voo, v_voo, p_voo, is_usd=True)
+    t_shares_smh, t_cost_smh = calc_trade(target_smh, v_smh, p_smh, is_usd=True)
+
+    # 精算本次總調整所需的摩擦成本/交割款總額面額
+    estimated_current_cost = abs(t_cost_00713) + abs(t_cost_voo) + abs(t_cost_smh)
+
+    # =========================================================================
+    # 📌 【7. JSON 本地歷史記錄儲存與成本追蹤累加】
+    # =========================================================================
+    history_file = "rebalance_history.json"
+    history_data = {"total_count": 0, "total_cost": 0.0, "records": []}
+
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                history_data = json.load(f)
+        except:
+            pass
+
+    # 若今天觸發了超越 ±5% 的真實再平衡建議，將其自動寫入本地紀錄檔案
+    if any_trigger:
+        history_data["total_count"] += 1
+        history_data["total_cost"] += estimated_current_cost
+
+    new_record = {
+        "date": taiwan_time.strftime("%Y-%m-%d"),
+        "ratios": {"00713": round(act_00713*100,1), "voo": round(act_voo*100,1), "smh": round(act_smh*100,1)},
+        "triggered": any_trigger,
+        "estimated_cost": round(estimated_current_cost) if any_trigger else 0
+    }
+    history_data["records"].append(new_record)
+
+    try:
+        with open(history_file, "w", encoding="utf-8") as f:
+            json.dump(history_data, f, ensure_ascii=False, indent=4)
+    except:
+        pass
+
+    # =========================================================================
+    # 📌 【8. 產出全新智慧型再平衡 LINE 通知報告】
+    # =========================================================================
     report = (
-        f"📈 【每日資產再平衡定期回報】\n"
-        f"⏰ 觀測時間: {current_time}\n"
-        f"💵 當前美金匯率: {usdtwd:.2f}\n"
-        f"💰 組合總市值: {total_assets_twd:,.0f} 元台幣\n"
+        f"📊 【unclelee 資產再平衡決策哨兵】\n"
+        f"⏰ 觀測時間 (台灣): {taiwan_time.strftime('%Y-%m-%d %H:%M')}\n"
+        f"💵 即時美金匯率: {usd_to_twd:.2f} TWD\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"🔍 【即時價格 × 股數 ＝ 當前市值】(Double Check)\n"
-        f"• 00713: {price_00713:.2f} TWD × {shares_00713} 股 ＝ NT$ {value_00713_twd:,.0f}\n"
-        f"• VOO  : {price_voo:.2f} USD × {shares_voo} 股 ＝ US$ {shares_voo*price_voo:,.2f}\n"
-        f"• SMH  : {price_smh:.2f} USD × {shares_smh} 股 ＝ US$ {shares_smh*price_smh:,.2f}\n"
+        f"📈 各檔標的在庫比例體檢：\n"
+        f"• 00713 元大台灣高息低波\n"
+        f"  現況: {act_00713*100:.1f}% (目標 {target_00713*100:.0f}%) -> {status_00713}\n"
+        f"  💡 {note_00713}\n\n"
+        f"• VOO Vanguard 標普500\n"
+        f"  現況: {act_voo*100:.1f}% (目標 {target_voo*100:.0f}%) -> {status_voo}\n"
+        f"  💡 {note_voo}\n\n"
+        f"• SMH 費城半導體 ETF\n"
+        f"  現況: {act_smh*100:.1f}% (目標 {target_smh*100:.0f}%) -> {status_smh}\n"
+        f"  💡 {note_smh}\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"📊 實際比例 (目標配置):\n"
-        f"• 00713: {status_00713}\n"
-        f"• VOO  : {status_voo}\n"
-        f"• SMH  : {status_smh}\n"
+        f"🛠️ 演算法一鍵指引建議：\n"
+    )
+
+    if any_trigger:
+        def format_trade_msg(shares, cost):
+            if shares > 0: return f"🟢 應補進 +{shares} 股 (約需投入 NT$ {round(cost):,})"
+            elif shares < 0: return f"🔴 應減碼 {shares} 股 (約可回收 NT$ {round(abs(cost)):,})"
+            return "➡️ 比例精準，無需變動"
+
+        report += (
+            f"🎯 偵測到配置偏離度大於 5%，請執行以下精確平衡交易：\n"
+            f"1. 00713: {format_trade_msg(t_shares_00713, t_cost_00713)}\n"
+            f"2. VOO  : {format_trade_msg(t_shares_voo, t_cost_voo)}\n"
+            f"3. SMH  : {format_trade_msg(t_shares_smh, t_cost_smh)}\n"
+        )
+    else:
+        report += "⚖️ 當前全資產偏離度皆控制在 ±5% 內，配置非常穩健，【今日建議不執行任何交易】。\n"
+
+    report += (
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"{trade_advice_text}\n"
+        f"📊 本年度累積再平衡次數：{history_data['total_count']} 次\n"
+        f"📊 本年度累積調整成本：約 NT$ {round(history_data['total_cost']):,}\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"💡 哨兵提示: 本報告已自動計算複委託圈存差額。若偏離度超過 ±2%，可依指引微調以落實投資紀律。"
+        f"💡 決策大腦：加寬閾值至 5% 能幫您有效減少非必要交易手續費；多看一眼5日漲跌幅，能讓您在市場動盪時保持極致的冷靜。"
     )
     return report
 
 def send_line_message(message_text):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
     user_id = os.environ.get("LINE_USER_ID")
-    
+    if not token or not user_id: return
     url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {token}"
-    }
-    payload = {
-        "to": user_id,
-        "messages": [{"type": "text", "text": message_text}]
-    }
-    requests.post(url, headers=headers, json=payload)
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+    payload = {"to": user_id, "messages": [{"type": "text", "text": message_text}]}
+    try: requests.post(url, headers=headers, json=payload)
+    except: pass
 
 def main():
     report_content = get_rebalance_report()
