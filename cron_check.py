@@ -21,7 +21,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台
+# 🧠 第一大核心：總經加權風控塔台 (🛠️ 升級美債利差 fast_info 即時價補救機制)
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -58,11 +58,12 @@ def get_risk_control_report(df):
         print("PE 擷取失敗，啟動標普回推備援:", e)
         data['pe_ratio'] = None
 
-    # --- 3. 10Y-2Y 美債利差 ---
+    # --- 3. 10Y-2Y 美債利差 (🛠️ 雙層精密即時報價防禦) ---
     try:
         t10_val, t02_val = None, None
         t10_series, t02_series = None, None
 
+        # 第一層：嘗試從全域打包大數據矩陣中提取歷史收盤
         if df is not None and 'Close' in df:
             if '^TNX' in df['Close'].columns and '^2Y' in df['Close'].columns:
                 t10_series = df['Close']['^TNX'].dropna()
@@ -71,34 +72,38 @@ def get_risk_control_report(df):
                     t10_val = float(t10_series.iloc[-1])
                     t02_val = float(t02_series.iloc[-1])
 
+        # 第二層核心補救：如果大數據歷史序列尚未生成 (清晨常見)，直接調用 fast_info 快照最新現價
         if t10_val is None or t02_val is None:
+            print("💡 歷史 K 線未就緒，啟動美債即時特快通道補救...")
             t10_ticker = yf.Ticker("^TNX")
             t02_ticker = yf.Ticker("^2Y")
             t10_val = t10_ticker.fast_info.get('last_price') or t10_ticker.info.get('regularMarketPrice')
             t02_val = t02_ticker.fast_info.get('last_price') or t02_ticker.info.get('regularMarketPrice')
             
-            t10_series = t10_ticker.history(period="5d")['Close'].dropna()
-            t02_series = t02_ticker.history(period="5d")['Close'].dropna()
+            # 用於趨勢箭頭判定的歷史序列補抓
+            if t10_series is None or t10_series.empty: t10_series = t10_ticker.history(period="5d")['Close'].dropna()
+            if t02_series is None or t02_series.empty: t02_series = t02_ticker.history(period="5d")['Close'].dropna()
 
         if t10_val is not None and t02_val is not None:
+            # 修正 yfinance 的 10 倍放大 BUG
             if t10_val > 15: t10_val /= 10
             if t02_val > 15: t02_val /= 10
             
             current_spread = t10_val - t02_val
-            data['yield_spread_bps'] = round(current_spread * 100, 1)
+            data['yield_spread_bps'] = round(current_spread * 100, 1) # 換算為基點 bps
             
+            # 對齊歷史長度精算趨勢箭頭
             min_len = min(len(t10_series), len(t02_series))
-            s10 = t10_series.iloc[-min_len:].copy()
-            s02 = t02_series.iloc[-min_len:].copy()
-            s10 = s10.apply(lambda x: x/10 if x > 15 else x)
-            s02 = s02.apply(lambda x: x/10 if x > 15 else x)
+            s10 = t10_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
+            s02 = t02_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
             
             spread_history_bps = (s10 - s02) * 100
             data['yield_arrow'] = get_trend_arrow(spread_history_bps)
         else:
-            raise Exception("未取得有效美債價格")
+            raise Exception("雙層通道路由皆未取得有效美債殖利率")
+            
     except Exception as e:
-        print("美債利差精算失敗:", e)
+        print("美債利差精算崩潰:", e)
         data['yield_spread_bps'], data['yield_arrow'] = None, "⏳"
 
     # --- 4. 高收益債變化率 (HYG 近30日變化) ---
@@ -301,7 +306,7 @@ def get_risk_control_report(df):
     return report
 
 # =========================================================================
-# 📊 第二大核心：資產再平衡決策哨兵 (🚀 自動降級容錯完全體)
+# 📊 第二大核心：資產再平衡決策哨兵
 # =========================================================================
 def get_rebalance_report(df):
     config_file = "config.json"
@@ -322,9 +327,7 @@ def get_rebalance_report(df):
     target_voo = 0.40      
     target_smh = 0.20      
 
-    # 🛠️ 核心進化：雙層安全價格獲取工具（解決 yfinance 批次對齊Bug）
     def safe_get_price_v3(close_df, ticker):
-        # 第一層：嘗試從全域大數據矩陣讀取
         try:
             if close_df is not None and ticker in close_df.columns:
                 series = close_df[ticker].dropna()
@@ -333,7 +336,6 @@ def get_rebalance_report(df):
         except Exception as ex:
             print(f"批次矩陣提取 {ticker} 欄位異常，切換獨立通道: {ex}")
 
-        # 第二層：補救通道（若大矩陣沒對齊，直接單獨下載歷史紀錄撈取最新價）
         try:
             fallback_series = yf.Ticker(ticker).history(period="5d")['Close'].dropna()
             if not fallback_series.empty:
@@ -345,12 +347,10 @@ def get_rebalance_report(df):
 
     close_df = df['Close'] if (df is not None and 'Close' in df) else None
     
-    # 執行全自動抓取與補救
     p_voo = safe_get_price_v3(close_df, 'VOO')
     p_smh = safe_get_price_v3(close_df, 'SMH')
     usd_to_twd = safe_get_price_v3(close_df, 'TWD=X') or 32.5
 
-    # 00713 單獨精密管道抓取
     t_00713 = yf.Ticker("00713.TW")
     p_00713 = t_00713.fast_info.get('last_price') or t_00713.info.get('regularMarketPrice')
     if p_00713 is None:
@@ -360,13 +360,11 @@ def get_rebalance_report(df):
             print("台股 00713 價格全通道斷線:", ex)
             p_00713 = None
 
-    # 判定與顯示市場狀態標籤
     if p_voo and p_smh:
         us_market_status = "正常開盤交易 (數據已自動補齊對齊 ✅)"
     else:
         us_market_status = "💤 美股市場休市日 / 數據伺服器異常中"
 
-    # 5日漲跌幅防禦性計算
     def calc_5d_pct(ticker_name, is_tw=False):
         try:
             if is_tw:
@@ -388,7 +386,6 @@ def get_rebalance_report(df):
 
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
     
-    # 00713 除息日特別安全期判定
     is_ex_dividend_day = False
     try:
         divs = t_00713.dividends
@@ -398,13 +395,11 @@ def get_rebalance_report(df):
     except:
         if taiwan_time.month in [3, 6, 9, 12] and 15 <= taiwan_time.day <= 20: is_ex_dividend_day = True
 
-    # 計算各分項市值 (若抓不到價格則以 0 代替，避免計算發生 TypeError)
     v_00713 = shares_00713 * p_00713 if p_00713 else 0
     v_voo = shares_voo * p_voo * usd_to_twd if p_voo else 0
     v_smh = shares_smh * p_smh * usd_to_twd if p_smh else 0
     total_portfolio_value = v_00713 + v_voo + v_smh
 
-    # 計算即時權重佔比
     act_00713 = (v_00713 / total_portfolio_value) if total_portfolio_value > 0 else 0
     act_voo = (v_voo / total_portfolio_value) if total_portfolio_value > 0 else 0
     act_smh = (v_smh / total_portfolio_value) if total_portfolio_value > 0 else 0
@@ -465,7 +460,6 @@ def get_rebalance_report(df):
         f"🛠️ 演算法一鍵指引建議：\n"
     )
 
-    # 必須在三方數據皆齊全時，才進行平衡股數精算，避免失真
     if p_voo and p_smh and p_00713:
         any_trigger = trigger_00713 or trigger_voo or trigger_smh
         
@@ -494,7 +488,6 @@ def get_rebalance_report(df):
     else:
         report += "💤 【交易指引暫停提示】：因今日特定海外數據未完全對齊或休市，為防止市場收盤時間差導致不對稱交易，今日「不提供具體買賣股數建議」，資產比例體檢仍供參考。\n"
 
-    # 讀取與計算年度再平衡歷史次數
     history_file = "rebalance_history.json"
     history_data = {"total_count": 0, "total_cost": 0.0, "records": []}
     if os.path.exists(history_file):
