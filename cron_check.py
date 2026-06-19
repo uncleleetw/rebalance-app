@@ -361,6 +361,9 @@ def get_rebalance_report(df):
     else: shares_00713, shares_voo, shares_smh = 10153, 28, 15
 
     target_00713, target_voo, target_smh = 0.40, 0.40, 0.20
+    
+    # 🛠️ 修正：新增定義除息日防呆開關，避免 NameError 阻斷執行
+    is_ex_dividend_day = False 
 
     def safe_get_price_v3(close_df, ticker):
         try:
