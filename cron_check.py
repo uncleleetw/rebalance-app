@@ -20,7 +20,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (🛠️ 修正：長週期指標完全限縮至每月1號)
+# 🧠 第一大核心：總經加權風控塔台 (🛠️ 已修正：全面排除 NoneType 比較盲點)
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -39,7 +39,7 @@ def get_risk_control_report(df):
             print("風控讀取 config.json 異常:", e)
 
     # =========================================================================
-    # 📆 每日必定執行：6大核心量化指標
+    # 📆 每日核心量化指標數據抓取
     # =========================================================================
     # --- 1. VIX 恐慌指數 ---
     try:
@@ -149,10 +149,10 @@ def get_risk_control_report(df):
         data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
 
     # =========================================================================
-    # 🛠️ 修正 1 & 2 & 3：限縮至每月 1 號才觸發計算與連線的長週期指標
+    # 📆 月度核心量化指標數據抓取 (僅限每月 1 號)
     # =========================================================================
     if is_monthly_check:
-        # 🆕 --- 7. 席勒 CAPE 比率 (只在1號爬蟲) ---
+        # --- 7. 席勒 CAPE 比率 ---
         try:
             resp = requests.get("https://www.multpl.com/shiller-pe", timeout=10)
             soup = BeautifulSoup(resp.text, 'html.parser')
@@ -162,7 +162,7 @@ def get_risk_control_report(df):
             print(f"席勒CAPE 1號抓取攔截: {e}")
             data['shiller_cape'] = None
 
-        # 🆕 --- 8. 修正版巴菲特指標 (只在1號計算) ---
+        # --- 8. 修正版巴菲特指標 ---
         try:
             if df is not None and 'Close' in df and '^W5000' in df['Close'].columns:
                 w5000_series = df['Close']['^W5000'].dropna()
@@ -177,64 +177,88 @@ def get_risk_control_report(df):
         except:
             data['buffett_indicator'] = None
 
-        # 🆕 --- 9. 紐約聯準會衰退機率 (只在1號讀取) ---
+        # --- 9. 紐約聯準會衰退機率 ---
         data['recession_prob'] = config_data.get("recession_probability_manual", None)
 
-
     # =========================================================================
-    # 🚦 評分與燈號分層整合系統
+    # 🚦 燈號級距與加權總分計算核心 (🛠️ 精準移除 NoneType 比較風險)
     # =========================================================================
     total_score = 0
 
-    # 1. VIX (0-2分)
+    # 1. VIX 燈號與計分
     if data.get('vix') is not None:
+        vix_txt = f"{data['vix']:.2f} {data['vix_arrow']}"
+        vix_l = "🔴" if data['vix'] > 30 else ("🟡" if data['vix'] > 20 else "🟢")
         total_score += 2 if data['vix'] > 30 else (1 if data['vix'] > 20 else 0)
-    # 2. 標普 PE (0-2分)
-    if data.get('pe_ratio') is not None:
-        total_score += 2 if data['pe_ratio'] > 30 else (1 if data['pe_ratio'] > 26 else 0)
-    # 3. 美債利差 (0-2分)
-    if data.get('yield_spread_bps') is not None:
-        total_score += 2 if data['yield_spread_bps'] < -50 else (1 if data['yield_spread_bps'] < 0 else 0)
-    # 4. HYG (0-2分)
-    if data.get('hy_oas') is not None:
-        total_score += 2 if data['hy_oas'] < -3.5 else (1 if data['hy_oas'] < -1.5 else 0)
-    # 5. TWD匯率 (0-2分)
-    if data.get('twd_bias_pct') is not None:
-        total_score += 2 if data['twd_bias_pct'] > 1.5 else (1 if data['twd_bias_pct'] > 0.5 else 0)
-    # 6. 台股乖離 (0-2分)
-    if data.get('tw_bias') is not None:
-        total_score += 2 if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else (1 if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else 0)
+    else:
+        vix_txt, vix_l = "延遲 ⏳", "⚪"
 
-    # 🛠️ 修正 4：動態門檻判定 (平日最高12分 / 1號最高21分)
+    # 2. 標普 PE 燈號與計分
+    if data.get('pe_ratio') is not None:
+        pe_txt = f"{data['pe_ratio']:.1f}倍"
+        pe_l = "🔴" if data['pe_ratio'] > 30 else ("🟡" if data['pe_ratio'] > 26 else "🟢")
+        total_score += 2 if data['pe_ratio'] > 30 else (1 if data['pe_ratio'] > 26 else 0)
+    else:
+        pe_txt, pe_l = "延遲 ⏳", "⚪"
+
+    # 3. 美債利差 燈號與計分 (🛠️ 完美修復點)
+    if data.get('yield_spread_bps') is not None:
+        yield_txt = f"{data['yield_spread_bps']:.1f} bps {data['yield_arrow']}"
+        yield_l = "🔴" if data['yield_spread_bps'] < -50 else ("🟡" if data['yield_spread_bps'] < 0 else "🟢")
+        total_score += 2 if data['yield_spread_bps'] < -50 else (1 if data['yield_spread_bps'] < 0 else 0)
+    else:
+        yield_txt, yield_l = "延遲 ⏳", "⚪"
+
+    # 4. HYG 燈號與計分
+    if data.get('hy_oas') is not None:
+        hy_txt = f"{data['hy_oas']:+.2f}% {data['hy_arrow']}"
+        hy_l = "🔴" if data['hy_oas'] < -3.5 else ("🟡" if data['hy_oas'] < -1.5 else "🟢")
+        total_score += 2 if data['hy_oas'] < -3.5 else (1 if data['hy_oas'] < -1.5 else 0)
+    else:
+        hy_txt, hy_l = "延遲 ⏳", "⚪"
+
+    # 5. TWD匯率 燈號與計分
+    if data.get('twd_bias_pct') is not None:
+        twd_txt = f"{data['twd_fx']:.2f} ({data['twd_bias_pct']:+.1f}%) {data['twd_arrow']}"
+        twd_l = "🔴" if data['twd_bias_pct'] > 1.5 else ("🟡" if data['twd_bias_pct'] > 0.5 else "🟢")
+        total_score += 2 if data['twd_bias_pct'] > 1.5 else (1 if data['twd_bias_pct'] > 0.5 else 0)
+    else:
+        twd_txt, twd_l = "延遲 ⏳", "⚪"
+
+    # 6. 台股乖離 燈號與計分
+    if data.get('tw_bias') is not None:
+        tw_txt = f"{data['tw_bias']:.1f}% {data['tw_bias_arrow']}"
+        tw_l = "🔴" if (data['tw_bias'] > 6 or data['tw_bias'] < -8) else ("🟡" if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5) else "🟢")
+        total_score += 2 if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else (1 if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else 0)
+    else:
+        tw_txt, tw_l = "延遲 ⏳", "⚪"
+
+    # 🛠️ 長週期指標動態加總判定 (僅限 1 號)
     if is_monthly_check:
-        # 7. 席勒 CAPE 分數計算
         if data.get('shiller_cape') is not None:
             c_val = data['shiller_cape']
             c_s = 0 if c_val < 25 else (1 if c_val < 32 else (2 if c_val < 40 else 3))
             total_score += c_s
-        # 8. 巴菲特指標分數計算
+            
         if data.get('buffett_indicator') is not None:
             b_val = data['buffett_indicator']
             b_s = 0 if b_val < 100 else (1 if b_val < 150 else (2 if b_val < 200 else 3))
             total_score += b_s
-        # 9. 衰退機率分數計算
+            
         if data.get('recession_prob') is not None:
             r_val = data['recession_prob']
             r_s = 0 if r_val < 15 else (1 if r_val < 30 else (2 if r_val < 50 else 3))
             total_score += r_s
 
-        # 1號專用：21分制門檻
         if total_score >= 15: status_light = "🔴 【四級極端風暴】停利回收現金"
         elif total_score >= 10: status_light = "🟠 【三級高風險】減碼/停止加碼"
         elif total_score >= 5: status_light = "🟡 【二級市場觀望】暫緩追高"
         else: status_light = "🟢 【一級安全綠燈】紀律扣款/大膽加碼"
     else:
-        # 平日專用：12分制門檻
         if total_score >= 9: status_light = "🔴 【四級極端風暴】停利回收現金"
         elif total_score >= 6: status_light = "🟠 【三級高風險】減碼/停止加碼"
         elif total_score >= 3: status_light = "🟡 【二級市場觀望】暫緩追高"
         else: status_light = "🟢 【一級安全綠燈】紀律扣款/大膽加碼"
-
 
     # --- 歷史風險去重更新邏輯 ---
     risk_file = "risk_history.json"
@@ -263,25 +287,6 @@ def get_risk_control_report(df):
     # =========================================================================
     # 🖨️ 報告排版分層輸出
     # =========================================================================
-    # 每日核心指標文本生成
-    vix_txt = f"{data['vix']:.2f} {data['vix_arrow']}" if data.get('vix') is not None else "延遲 ⏳"
-    vix_l = "🔴" if data.get('vix', 0) > 30 else ("🟡" if data.get('vix', 0) > 20 else "🟢") if data.get('vix') is not None else "⚪"
-    
-    pe_txt = f"{data['pe_ratio']:.1f}倍" if data.get('pe_ratio') is not None else "延遲 ⏳"
-    pe_l = "🔴" if data.get('pe_ratio', 0) > 30 else ("🟡" if data.get('pe_ratio', 0) > 26 else "🟢") if data.get('pe_ratio') is not None else "⚪"
-    
-    yield_txt = f"{data['yield_spread_bps']:.1f} bps {data['yield_arrow']}" if data.get('yield_spread_bps') is not None else "延遲 ⏳"
-    yield_l = "🔴" if data.get('yield_spread_bps', 0) < -50 else ("🟡" if data.get('yield_spread_bps', 0) < 0 else "🟢") if data.get('yield_spread_bps') is not None else "⚪"
-    
-    hy_txt = f"{data['hy_oas']:+.2f}% {data['hy_arrow']}" if data.get('hy_oas') is not None else "延遲 ⏳"
-    hy_l = "🔴" if data.get('hy_oas', 0) < -3.5 else ("🟡" if data.get('hy_oas', 0) < -1.5 else "🟢") if data.get('hy_oas') is not None else "⚪"
-    
-    twd_txt = f"{data['twd_fx']:.2f} ({data['twd_bias_pct']:+.1f}%) {data['twd_arrow']}" if data.get('twd_bias_pct') is not None else "延遲 ⏳"
-    twd_l = "🔴" if data.get('twd_bias_pct', 0) > 1.5 else ("🟡" if data.get('twd_bias_pct', 0) > 0.5 else "🟢") if data.get('twd_bias_pct') is not None else "⚪"
-    
-    tw_txt = f"{data['tw_bias']:.1f}% {data['tw_bias_arrow']}" if data.get('tw_bias') is not None else "延遲 ⏳"
-    tw_l = "🔴" if (data.get('tw_bias', 0) > 6 or data.get('tw_bias', 0) < -8) else ("🟡" if (data.get('tw_bias', 0) > 3.5 or data.get('tw_bias', 0) < -5) else "🟢") if data.get('tw_bias') is not None else "⚪"
-
     report = (
         f"🚨 【unclelee 總經加權風控塔台】\n"
         f"⏰ {taiwan_time.strftime('%m-%d %H:%M')} | 📉 軌跡: {yesterday_score_text}\n"
@@ -296,22 +301,15 @@ def get_risk_control_report(df):
         f"• 台股20日乖離 : {tw_txt} | 風險: {tw_l}\n"
     )
 
-    # 🛠️ 修正 4：只有在 1 號時，才在下方追加獨立的「大盤月度長檢」區塊與手動更新提醒
     if is_monthly_check:
-        if data.get('shiller_cape') is None: cape_txt, cape_l = "延遲 ⏳", "⚪"
-        else:
-            c_val = data['shiller_cape']
-            cape_txt = f"{c_val:.1f}倍"; cape_l = "🟢 合理" if c_val < 25 else ("🟡 偏高" if c_val < 32 else ("🟠 警戒" if c_val < 40 else "🔴 危險"))
+        cape_txt = f"{data['shiller_cape']:.1f}倍" if data.get('shiller_cape') is not None else "延遲 ⏳"
+        cape_l = ("🟢 合理" if data['shiller_cape'] < 25 else ("🟡 偏高" if data['shiller_cape'] < 32 else ("🟠 警戒" if data['shiller_cape'] < 40 else "🔴 危險"))) if data.get('shiller_cape') is not None else "⚪"
 
-        if data.get('buffett_indicator') is None: bft_txt, bft_l = "延遲 ⏳", "⚪"
-        else:
-            b_val = data['buffett_indicator']
-            bft_txt = f"{b_val:.1f}%"; bft_l = "🟢 合理" if b_val < 100 else ("🟡 偏高" if b_val < 150 else ("🟠 警戒" if b_val < 200 else "🔴 危險"))
+        bft_txt = f"{data['buffett_indicator']:.1f}%" if data.get('buffett_indicator') is not None else "延遲 ⏳"
+        bft_l = ("🟢 合理" if data['buffett_indicator'] < 100 else ("🟡 偏高" if data['buffett_indicator'] < 150 else ("🟠 警戒" if data['buffett_indicator'] < 200 else "🔴 危險"))) if data.get('buffett_indicator') is not None else "⚪"
 
-        if data.get('recession_prob') is None: rec_txt, rec_l = "未設定 ⏳", "⚪"
-        else:
-            r_val = data['recession_prob']
-            rec_txt = f"{r_val:.1f}%"; rec_l = "🟢 正常" if r_val < 15 else ("🟡 留意" if r_val < 30 else ("🟠 警戒" if r_val < 50 else "🔴 危險"))
+        rec_txt = f"{data['recession_prob']:.1f}%" if data.get('recession_prob') is not None else "未設定 ⏳"
+        rec_l = ("🟢 正常" if data['recession_prob'] < 15 else ("🟡 留意" if data['recession_prob'] < 30 else ("🟠 警戒" if data['recession_prob'] < 50 else "🔴 危險"))) if data.get('recession_prob') is not None else "⚪"
 
         report += (
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
@@ -365,6 +363,24 @@ def get_rebalance_report(df):
         except: p_00713 = None
 
     us_market_status = "正常 ✅" if p_voo and p_smh else "休市 💤"
+
+    def calc_5d_pct(ticker_name, is_tw=False):
+        try:
+            if is_tw:
+                series = yf.Ticker(ticker_name).history(period="8d")['Close'].dropna()
+            elif df is not None and 'Close' in df and ticker_name in df['Close'].columns:
+                series = df['Close'][ticker_name].dropna()
+            else:
+                series = yf.Ticker(ticker_name).history(period="8d")['Close'].dropna()
+            if len(series) >= 6:
+                pct = ((series.iloc[-1] - series.iloc[-6]) / series.iloc[-6]) * 100
+                return f"{'+' if pct >= 0 else ''}{pct:.1f}%"
+        except: pass
+        return "暫無"
+
+    pct_00713 = calc_5d_pct('00713.TW', is_tw=True)
+    pct_voo = calc_5d_pct('VOO') if p_voo else "暫停"
+    pct_smh = calc_5d_pct('SMH') if p_smh else "暫停"
 
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
     is_ex_dividend_day = (taiwan_time.month in [3, 6, 9, 12] and 15 <= taiwan_time.day <= 20)
@@ -472,7 +488,6 @@ def send_line_message(message_text):
 def main():
     shared_df = None
     try:
-        # 僅下載平日核心與巴菲特指標所需之標的
         tickers = ["^VIX", "SPY", "^GSPC", "^TNX", "^2Y", "HYG", "TWD=X", "^TWII", "^W5000"]
         shared_df = yf.download(tickers, period="50d", progress=False)
         if shared_df is None or shared_df.empty or 'Close' not in shared_df: shared_df = None
