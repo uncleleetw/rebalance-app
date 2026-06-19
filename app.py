@@ -20,7 +20,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (🚀 已修正第 51 行語法殘留字元 Bug)
+# 🧠 第一大核心：總經加權風控塔台 (🛠️ 終極修復：改用 df.get('Close') 封殺 KeyError)
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -38,13 +38,16 @@ def get_risk_control_report(df):
         except Exception as e:
             print("風控讀取 config.json 異常:", e)
 
+    # 安全提取全域矩陣中的 Close 欄位
+    close_df = df.get('Close') if df is not None else None
+
     # =========================================================================
     # 📆 每日核心量化指標數據抓取
     # =========================================================================
     # --- 1. VIX 恐慌指數 ---
     try:
-        if df is not None and 'Close' in df and '^VIX' in df['Close'].columns:
-            vix_series = df['Close']['^VIX'].dropna()
+        if close_df is not None and '^VIX' in close_df.columns:
+            vix_series = close_df['^VIX'].dropna()
         else:
             vix_series = yf.Ticker("^VIX").history(period="10d")['Close'].dropna()
         data['vix'] = float(vix_series.iloc[-1])
@@ -52,14 +55,14 @@ def get_risk_control_report(df):
     except:
         data['vix'], data['vix_arrow'] = None, "⏳"
 
-    # --- 2. S&P 500 本益比 (🛠️ 語法已完美修正，刪除殘留字元) ---
+    # --- 2. S&P 500 本益比 (🛠️ 已安全化，絕不噴 KeyError) ---
     try:
         spy = yf.Ticker("SPY")
         pe_val = spy.info.get('trailingPE') or spy.fast_info.get('trailing_pe') or spy.info.get('forwardPE')
         if pe_val and pe_val > 0: data['pe_ratio'] = float(pe_val)
         else:
-            if df is not None and 'Close' in df and '^GSPC' in df['Close'].columns:
-                sp500_close = df['Close']['^GSPC'].dropna()
+            if close_df is not None and '^GSPC' in close_df.columns:
+                sp500_close = close_df['^GSPC'].dropna()
             else:
                 sp500_close = yf.Ticker("^GSPC").history(period="10d")['Close'].dropna()
             data['pe_ratio'] = round(float(sp500_close.iloc[-1]) / 238.5, 1)
@@ -70,7 +73,6 @@ def get_risk_control_report(df):
     t10_val, t02_val = None, None
     t10_src, t02_src = "未取得", "未取得"
 
-    # 📥 【FRED 官方數據庫專用代碼下載器】
     def get_treasury_yield_from_fred(series_id):
         try:
             url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
@@ -171,8 +173,8 @@ def get_risk_control_report(df):
 
     # --- 4. 高收益債變化率 ---
     try:
-        if df is not None and 'Close' in df and 'HYG' in df['Close'].columns:
-            hyg_series = df['Close']['HYG'].dropna()
+        if close_df is not None and 'HYG' in close_df.columns:
+            hyg_series = close_df['HYG'].dropna()
         else:
             hyg_series = yf.Ticker("HYG").history(period="50d")['Close'].dropna()
         current_hyg = hyg_series.iloc[-1]
@@ -184,8 +186,8 @@ def get_risk_control_report(df):
 
     # --- 5. 台幣兌美元匯率 ---
     try:
-        if df is not None and 'Close' in df and 'TWD=X' in df['Close'].columns:
-            twd_series = df['Close']['TWD=X'].dropna()
+        if close_df is not None and 'TWD=X' in close_df.columns:
+            twd_series = close_df['TWD=X'].dropna()
         else:
             twd_series = yf.Ticker("TWD=X").history(period="50d")['Close'].dropna()
         current_twd = float(twd_series.iloc[-1])
@@ -198,8 +200,8 @@ def get_risk_control_report(df):
 
     # --- 6. 台股加權指數 20日乖離率 ---
     try:
-        if df is not None and 'Close' in df and '^TWII' in df['Close'].columns:
-            twii_series = df['Close']['^TWII'].dropna()
+        if close_df is not None and '^TWII' in close_df.columns:
+            twii_series = close_df['^TWII'].dropna()
         else:
             twii_series = yf.Ticker("^TWII").history(period="50d")['Close'].dropna()
         current_twii = twii_series.iloc[-1]
@@ -228,8 +230,8 @@ def get_risk_control_report(df):
             data['shiller_cape'] = None
 
         try:
-            if df is not None and 'Close' in df and '^W5000' in df['Close'].columns:
-                w5000_series = df['Close']['^W5000'].dropna()
+            if close_df is not None and '^W5000' in close_df.columns:
+                w5000_series = close_df['^W5000'].dropna()
             else:
                 w5000_series = yf.Ticker("^W5000").history(period="10d")['Close'].dropna()
             if not w5000_series.empty:
@@ -385,6 +387,9 @@ def get_rebalance_report(df):
     target_00713, target_voo, target_smh = 0.40, 0.40, 0.20
     is_ex_dividend_day = False 
 
+    # 安全提取全域矩陣中的 Close 欄位
+    close_df = df.get('Close') if df is not None else None
+
     def safe_get_price_v3(close_df, ticker):
         try:
             if close_df is not None and ticker in close_df.columns:
@@ -397,7 +402,6 @@ def get_rebalance_report(df):
         except: pass
         return None
 
-    close_df = df['Close'] if (df is not None and 'Close' in df) else None
     p_voo = safe_get_price_v3(close_df, 'VOO')
     p_smh = safe_get_price_v3(close_df, 'SMH')
     usd_to_twd = safe_get_price_v3(close_df, 'TWD=X') or 32.5
@@ -414,8 +418,8 @@ def get_rebalance_report(df):
         try:
             if is_tw:
                 series = yf.Ticker(ticker_name).history(period="8d")['Close'].dropna()
-            elif df is not None and 'Close' in df and ticker_name in df['Close'].columns:
-                series = df['Close'][ticker_name].dropna()
+            elif close_df is not None and ticker_name in close_df.columns:
+                series = close_df[ticker_name].dropna()
             else:
                 series = yf.Ticker(ticker_name).history(period="8d")['Close'].dropna()
             if len(series) >= 6:
@@ -531,6 +535,7 @@ def send_line_message(message_text):
 def main():
     shared_df = None
     try:
+        # 下載主要監控標的
         tickers = ["^VIX", "SPY", "^GSPC", "^TNX", "HYG", "TWD=X", "^TWII", "^W5000"]
         shared_df = yf.download(tickers, period="50d", progress=False)
         if shared_df is None or shared_df.empty or 'Close' not in shared_df: shared_df = None
