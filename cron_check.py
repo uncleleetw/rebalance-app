@@ -20,7 +20,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (🛠️ 終極修復：改用 df.get('Close') 封殺 KeyError)
+# 🧠 第一大核心：總經加權風控塔台 (🛠️ 終極強化：使用 hasattr 封殺所有結構突變錯誤)
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -39,14 +39,16 @@ def get_risk_control_report(df):
             print("風控讀取 config.json 異常:", e)
 
     # 安全提取全域矩陣中的 Close 欄位
-    close_df = df.get('Close') if df is not None else None
+    close_df = None
+    if df is not None and hasattr(df, 'get'):
+        close_df = df.get('Close')
 
     # =========================================================================
     # 📆 每日核心量化指標數據抓取
     # =========================================================================
     # --- 1. VIX 恐慌指數 ---
     try:
-        if close_df is not None and '^VIX' in close_df.columns:
+        if close_df is not None and hasattr(close_df, 'columns') and '^VIX' in close_df.columns:
             vix_series = close_df['^VIX'].dropna()
         else:
             vix_series = yf.Ticker("^VIX").history(period="10d")['Close'].dropna()
@@ -55,13 +57,13 @@ def get_risk_control_report(df):
     except:
         data['vix'], data['vix_arrow'] = None, "⏳"
 
-    # --- 2. S&P 500 本益比 (🛠️ 已安全化，絕不噴 KeyError) ---
+    # --- 2. S&P 500 本益比 ---
     try:
         spy = yf.Ticker("SPY")
         pe_val = spy.info.get('trailingPE') or spy.fast_info.get('trailing_pe') or spy.info.get('forwardPE')
         if pe_val and pe_val > 0: data['pe_ratio'] = float(pe_val)
         else:
-            if close_df is not None and '^GSPC' in close_df.columns:
+            if close_df is not None and hasattr(close_df, 'columns') and '^GSPC' in close_df.columns:
                 sp500_close = close_df['^GSPC'].dropna()
             else:
                 sp500_close = yf.Ticker("^GSPC").history(period="10d")['Close'].dropna()
@@ -145,7 +147,6 @@ def get_risk_control_report(df):
         if t10_val is not None and t02_val is not None:
             calc_spread_bps = round((t10_val - t02_val) * 100, 1)
             
-            # 合理性防呆檢查 (絕對值 > 300bps 視為異常)
             if abs(calc_spread_bps) > 300.0:
                 raise ValueError(f"利差數值離譜防呆觸發: {calc_spread_bps} bps")
                 
@@ -173,7 +174,7 @@ def get_risk_control_report(df):
 
     # --- 4. 高收益債變化率 ---
     try:
-        if close_df is not None and 'HYG' in close_df.columns:
+        if close_df is not None and hasattr(close_df, 'columns') and 'HYG' in close_df.columns:
             hyg_series = close_df['HYG'].dropna()
         else:
             hyg_series = yf.Ticker("HYG").history(period="50d")['Close'].dropna()
@@ -186,7 +187,7 @@ def get_risk_control_report(df):
 
     # --- 5. 台幣兌美元匯率 ---
     try:
-        if close_df is not None and 'TWD=X' in close_df.columns:
+        if close_df is not None and hasattr(close_df, 'columns') and 'TWD=X' in close_df.columns:
             twd_series = close_df['TWD=X'].dropna()
         else:
             twd_series = yf.Ticker("TWD=X").history(period="50d")['Close'].dropna()
@@ -200,7 +201,7 @@ def get_risk_control_report(df):
 
     # --- 6. 台股加權指數 20日乖離率 ---
     try:
-        if close_df is not None and '^TWII' in close_df.columns:
+        if close_df is not None and hasattr(close_df, 'columns') and '^TWII' in close_df.columns:
             twii_series = close_df['^TWII'].dropna()
         else:
             twii_series = yf.Ticker("^TWII").history(period="50d")['Close'].dropna()
@@ -230,7 +231,7 @@ def get_risk_control_report(df):
             data['shiller_cape'] = None
 
         try:
-            if close_df is not None and '^W5000' in close_df.columns:
+            if close_df is not None and hasattr(close_df, 'columns') and '^W5000' in close_df.columns:
                 w5000_series = close_df['^W5000'].dropna()
             else:
                 w5000_series = yf.Ticker("^W5000").history(period="10d")['Close'].dropna()
@@ -388,11 +389,13 @@ def get_rebalance_report(df):
     is_ex_dividend_day = False 
 
     # 安全提取全域矩陣中的 Close 欄位
-    close_df = df.get('Close') if df is not None else None
+    close_df = None
+    if df is not None and hasattr(df, 'get'):
+        close_df = df.get('Close')
 
     def safe_get_price_v3(close_df, ticker):
         try:
-            if close_df is not None and ticker in close_df.columns:
+            if close_df is not None and hasattr(close_df, 'columns') and ticker in close_df.columns:
                 series = close_df[ticker].dropna()
                 if not series.empty: return float(series.iloc[-1])
         except: pass
@@ -418,7 +421,7 @@ def get_rebalance_report(df):
         try:
             if is_tw:
                 series = yf.Ticker(ticker_name).history(period="8d")['Close'].dropna()
-            elif close_df is not None and ticker_name in close_df.columns:
+            elif close_df is not None and hasattr(close_df, 'columns') and ticker_name in close_df.columns:
                 series = close_df[ticker_name].dropna()
             else:
                 series = yf.Ticker(ticker_name).history(period="8d")['Close'].dropna()
@@ -535,7 +538,6 @@ def send_line_message(message_text):
 def main():
     shared_df = None
     try:
-        # 下載主要監控標的
         tickers = ["^VIX", "SPY", "^GSPC", "^TNX", "HYG", "TWD=X", "^TWII", "^W5000"]
         shared_df = yf.download(tickers, period="50d", progress=False)
         if shared_df is None or shared_df.empty or 'Close' not in shared_df: shared_df = None
