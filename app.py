@@ -6,13 +6,23 @@ import yfinance as yf
 
 def get_rebalance_report():
     # =========================================================================
-    # 📌 【1. 核心輸入區】李主任固定在庫持股數與黃金目標比例 (40%/40%/20%)
+    # 📌 【1. 外部組態讀取區】從 config.json 讀取李主任持股，達成邏輯與資料分離
     # =========================================================================
-    shares_00713 = 10153  
-    shares_voo = 28       
-    shares_smh = 15       
+    config_file = "config.json"
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+            shares_00713 = config_data.get("shares_00713", 10153)
+            shares_voo = config_data.get("shares_voo", 28)
+            shares_smh = config_data.get("shares_smh", 15)
+        except Exception as e:
+            return f"❌ 系統錯誤：讀取 config.json 失敗，請檢查格式是否正確。\n原因: {str(e)}"
+    else:
+        # 備用安全機制（若檔案不存在則使用預設值）
+        shares_00713, shares_voo, shares_smh = 10153, 28, 15
 
-    # 配置目標
+    # 配置目標比例
     target_00713 = 0.40
     target_voo = 0.40      
     target_smh = 0.20      
@@ -85,7 +95,7 @@ def get_rebalance_report():
     dev_smh = (act_smh - target_smh) * 100
 
     # =========================================================================
-    # 📌 【5. 偏離度閾值判定與偏離原因歸因】
+    # 📌 【5. 偏離度閾值判定與偏離原因歸因】 -> 🛠️ 已修正為防崩潰安全解析版本
     # =========================================================================
     def judge_deviation(dev_val, pct_5d, is_00713=False):
         if is_00713 and is_ex_dividend_day:
@@ -93,7 +103,14 @@ def get_rebalance_report():
             
         abs_dev = abs(dev_val)
         if abs_dev > 5.0:
-            reason = "主因為股價劇烈上漲被動稀釋" if (dev_val * (1 if float(pct_5d.replace('%',''))>=0 else -1)) > 0 else "真實資金配置失衡"
+            # 安全解析 5 日漲跌幅字串
+            try:
+                numeric_pct = float(pct_5d.replace('%', ''))
+                is_up = numeric_pct >= 0
+            except (ValueError, AttributeError):
+                is_up = True # 若為"暫無數據"則給予預設安全回傳，不影響判斷
+
+            reason = "主因為股價劇烈上漲被動稀釋" if (dev_val * (1 if is_up else -1)) > 0 else "真實資金配置失衡"
             return f"🔴 建議調整 (偏離 {dev_val:+.1f}%)", f"近5日漲跌: {pct_5d}，{reason}", True
         elif abs_dev > 2.0:
             return f"⚠️ 觀察中 (偏離 {dev_val:+.1f}%)", f"近5日漲跌: {pct_5d}，常規市場波動", False
@@ -124,7 +141,7 @@ def get_rebalance_report():
     estimated_current_cost = abs(t_cost_00713) + abs(t_cost_voo) + abs(t_cost_smh)
 
     # =========================================================================
-    # 📌 【7. JSON 本地歷史記錄儲存與成本追蹤累加】
+    # 📌 【7. JSON 本地歷史記錄儲存與成本追蹤累加】 -> 🛠️ 已修改為「股數變動才累加」邏輯
     # =========================================================================
     history_file = "rebalance_history.json"
     history_data = {"total_count": 0, "total_cost": 0.0, "records": []}
@@ -136,12 +153,33 @@ def get_rebalance_report():
         except:
             pass
 
-    if any_trigger:
-        history_data["total_count"] += 1
-        history_data["total_cost"] += estimated_current_cost
+    # 檢查是否為「執行交易後第一次回報」：比對歷史記錄中最後一筆的股數設定
+    is_first_report_after_trade = False
+    if history_data["records"]:
+        last_record = history_data["records"][-1]
+        last_shares = last_record.get("shares_snapshot", {})
+        
+        # 如果歷史記錄中有記錄先前的股數，且與今天讀取到的股數不同，代表主任執行了交易並更新了股數
+        if last_shares:
+            if (last_shares.get("00713") != shares_00713 or 
+                last_shares.get("voo") != shares_voo or 
+                last_shares.get("smh") != shares_smh):
+                is_first_report_after_trade = True
+    else:
+        # 如果是完全沒有歷史紀錄的第一次執行，不計入交易成本累加
+        is_first_report_after_trade = False
 
+    # 只有當股數確實發生變動時，才將上一筆觸發時估算的成本與次數真正結算累加
+    if is_first_report_after_trade:
+        history_data["total_count"] += 1
+        # 累加歷史最後一筆所預估的再平衡交易成本
+        if history_data["records"]:
+            history_data["total_cost"] += history_data["records"][-1].get("estimated_cost", 0)
+
+    # 建立本日的新紀錄快照
     new_record = {
         "date": taiwan_time.strftime("%Y-%m-%d"),
+        "shares_snapshot": {"00713": shares_00713, "voo": shares_voo, "smh": shares_smh},
         "ratios": {"00713": round(act_00713*100,1), "voo": round(act_voo*100,1), "smh": round(act_smh*100,1)},
         "triggered": any_trigger,
         "estimated_cost": round(estimated_current_cost) if any_trigger else 0
@@ -155,7 +193,7 @@ def get_rebalance_report():
         pass
 
     # =========================================================================
-    # 📌 【8. 產出全新智慧型再平衡 LINE 通知報告】 -> 🛠️ 兩張截圖元素全維度融合
+    # 📌 【8. 產出全新智慧型再平衡 LINE 通知報告】
     # =========================================================================
     report = (
         f"📊 【unclelee 資產再平衡決策哨兵】\n"
@@ -203,10 +241,10 @@ def get_rebalance_report():
 
     report += (
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"📊 本年度累積再平衡次數：{history_data['total_count']} 次\n"
-        f"📊 本年度累積調整成本：約 NT$ {round(history_data['total_cost']):,}\n"
+        f"📊 本年度已執行再平衡：{history_data['total_count']} 次\n"
+        f"📊 本年度累積已實現成本：約 NT$ {round(history_data['total_cost']):,}\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"💡 決策大腦：加寬閾值至 5% 能幫您有效減少非必要交易手續費；多看一眼5日漲跌幅，能讓您在市場動盪時保持極致的冷靜。"
+        f"💡 決策大腦：資產數據與程式邏輯已完美抽離；現在只有在您實際修正 config.json 中的持股數時，系統才會正式結算再平衡的執行次數與成本。"
     )
     return report
 
