@@ -10,7 +10,7 @@ import pandas as pd
 # =========================================================================
 def get_trend_arrow(series):
     """根據過去 5 天數據計算最新一天相較於前幾天的趨勢箭頭"""
-    if len(series) < 2:
+    if series is None or len(series) < 2:
         return "➡️"
     current = series.iloc[-1]
     prev = series.iloc[-2]
@@ -21,7 +21,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (修復切片、納入 W5000 備援與風險歷史)
+# 🧠 第一大核心：總經加權風控塔台
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -31,7 +31,11 @@ def get_risk_control_report(df):
     
     # --- 1. VIX 恐慌指數 ---
     try:
-        vix_series = df['Close']['^VIX'].dropna()
+        if df is not None and 'Close' in df and '^VIX' in df['Close'].columns:
+            vix_series = df['Close']['^VIX'].dropna()
+        else:
+            vix_series = yf.Ticker("^VIX").history(period="5d")['Close'].dropna()
+            
         data['vix'] = float(vix_series.iloc[-1])
         data['vix_arrow'] = get_trend_arrow(vix_series)
     except Exception as e:
@@ -45,16 +49,14 @@ def get_risk_control_report(df):
         if pe_val and pe_val > 0:
             data['pe_ratio'] = float(pe_val)
         else:
-            sp500_close = df['Close']['^GSPC'].dropna()
+            if df is not None and 'Close' in df and '^GSPC' in df['Close'].columns:
+                sp500_close = df['Close']['^GSPC'].dropna()
+            else:
+                sp500_close = yf.Ticker("^GSPC").history(period="5d")['Close'].dropna()
             data['pe_ratio'] = round(float(sp500_close.iloc[-1]) / 238.5, 1)
     except Exception as e:
         print("PE 擷取失敗，啟動標普回推備援:", e)
-        try:
-            sp500_close = df['Close']['^GSPC'].dropna()
-            data['pe_ratio'] = round(float(sp500_close.iloc[-1]) / 238.5, 1)
-        except Exception as ex:
-            print("PE 備援線路亦失敗:", ex)
-            data['pe_ratio'] = None
+        data['pe_ratio'] = None
 
     # --- 3. 10Y-2Y 美債利差 ---
     try:
@@ -62,11 +64,12 @@ def get_risk_control_report(df):
         t10_series, t02_series = None, None
 
         if df is not None and 'Close' in df:
-            t10_series = df['Close']['^TNX'].dropna()
-            t02_series = df['Close']['^2Y'].dropna()
-            if not t10_series.empty and not t02_series.empty:
-                t10_val = float(t10_series.iloc[-1])
-                t02_val = float(t02_series.iloc[-1])
+            if '^TNX' in df['Close'].columns and '^2Y' in df['Close'].columns:
+                t10_series = df['Close']['^TNX'].dropna()
+                t02_series = df['Close']['^2Y'].dropna()
+                if not t10_series.empty and not t02_series.empty:
+                    t10_val = float(t10_series.iloc[-1])
+                    t02_val = float(t02_series.iloc[-1])
 
         if t10_val is None or t02_val is None:
             t10_ticker = yf.Ticker("^TNX")
@@ -74,8 +77,8 @@ def get_risk_control_report(df):
             t10_val = t10_ticker.fast_info.get('last_price') or t10_ticker.info.get('regularMarketPrice')
             t02_val = t02_ticker.fast_info.get('last_price') or t02_ticker.info.get('regularMarketPrice')
             
-            if t10_series is None or t10_series.empty: t10_series = t10_ticker.history(period="5d")['Close'].dropna()
-            if t02_series is None or t02_series.empty: t02_series = t02_ticker.history(period="5d")['Close'].dropna()
+            t10_series = t10_ticker.history(period="5d")['Close'].dropna()
+            t02_series = t02_ticker.history(period="5d")['Close'].dropna()
 
         if t10_val is not None and t02_val is not None:
             if t10_val > 15: t10_val /= 10
@@ -100,7 +103,11 @@ def get_risk_control_report(df):
 
     # --- 4. 高收益債變化率 (HYG 近30日變化) ---
     try:
-        hyg_series = df['Close']['HYG'].dropna()
+        if df is not None and 'Close' in df and 'HYG' in df['Close'].columns:
+            hyg_series = df['Close']['HYG'].dropna()
+        else:
+            hyg_series = yf.Ticker("HYG").history(period="50d")['Close'].dropna()
+
         if len(hyg_series) >= 30:
             current_hyg = hyg_series.iloc[-1]
             past_hyg = hyg_series.iloc[-30]
@@ -115,7 +122,11 @@ def get_risk_control_report(df):
 
     # --- 5. 台幣兌美元匯率 (近30日均值動態偏離度) ---
     try:
-        twd_series = df['Close']['TWD=X'].dropna()
+        if df is not None and 'Close' in df and 'TWD=X' in df['Close'].columns:
+            twd_series = df['Close']['TWD=X'].dropna()
+        else:
+            twd_series = yf.Ticker("TWD=X").history(period="50d")['Close'].dropna()
+
         current_twd = float(twd_series.iloc[-1])
         if len(twd_series) >= 30:
             ma_30_twd = twd_series.iloc[-30:].mean()
@@ -129,9 +140,13 @@ def get_risk_control_report(df):
         print("台幣匯率動態偏離率計算失敗:", e)
         data['twd_fx'], data['twd_bias_pct'], data['twd_arrow'] = None, None, "⏳"
 
-    # --- 6. 台股加權指數 20日乖離率 (🛠️ 修正負數索引切片邊界) ---
+    # --- 6. 台股加權指數 20日乖離率 ---
     try:
-        twii_series = df['Close']['^TWII'].dropna()
+        if df is not None and 'Close' in df and '^TWII' in df['Close'].columns:
+            twii_series = df['Close']['^TWII'].dropna()
+        else:
+            twii_series = yf.Ticker("^TWII").history(period="50d")['Close'].dropna()
+
         current_twii = twii_series.iloc[-1]
         ma_20 = twii_series.iloc[-20:].mean()
         bias_val = ((current_twii - ma_20) / ma_20) * 100
@@ -139,7 +154,6 @@ def get_risk_control_report(df):
         bias_history = []
         for i in range(-5, 0):
             day_twii = twii_series.iloc[i]
-            # 🛠️ 修正 1：導入主任指導的 end_idx 修正，防止 i = -1 時切出空矩陣
             end_idx = i + 1 if i + 1 != 0 else len(twii_series)
             day_ma20 = twii_series.iloc[i-19 : end_idx].mean()
             bias_history.append(((day_twii - day_ma20) / day_ma20) * 100)
@@ -150,14 +164,12 @@ def get_risk_control_report(df):
         print("台股20日乖離率計算失敗:", e)
         data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
 
-    # 【每月長週期慢指標】(🛠️ 修正 2：安全欄位檢查與獨立備援通道)
+    # 【每月長週期慢指標】
     if is_monthly_check:
         try:
-            # 檢查 ^W5000 是否成功出現在共用大數據的欄位中
             if df is not None and 'Close' in df and '^W5000' in df['Close'].columns:
                 w5000 = df['Close']['^W5000'].dropna().iloc[-1]
             else:
-                # 備援：若打包下載漏掉或無盤中即時資料，單獨調用歷史通道抓取
                 w5000 = yf.Ticker("^W5000").history(period="5d")['Close'].dropna().iloc[-1]
                 
             data['buffett_indicator'] = (w5000 / 25000) * 100 
@@ -166,7 +178,10 @@ def get_risk_control_report(df):
             data['buffett_indicator'] = 185.0
             
         try:
-            gspc_series = df['Close']['^GSPC'].dropna()
+            if df is not None and 'Close' in df and '^GSPC' in df['Close'].columns:
+                gspc_series = df['Close']['^GSPC'].dropna()
+            else:
+                gspc_series = yf.Ticker("^GSPC").history(period="2y")['Close'].dropna()
             data['sp500_ma_bias'] = ((gspc_series.iloc[-1] - gspc_series.mean()) / gspc_series.mean()) * 100
         except Exception as e:
             print("標普2年乖離率精算延遲:", e)
@@ -175,49 +190,49 @@ def get_risk_control_report(df):
     total_score = 0
     
     # --- 評分與個別燈號判定 ---
-    if data['vix'] is None: vix_text, vix_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
+    if data.get('vix') is None: vix_text, vix_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
     else:
         vix_text = f"{data['vix']:.2f} {data['vix_arrow']}"
         if data['vix'] > 30: total_score += 2; vix_alert = "🔴 恐慌 (2分)"
         elif data['vix'] > 20: total_score += 1; vix_alert = "🟡 警戒 (1分)"
         else: vix_alert = "🟢 正常 (0分)"
 
-    if data['pe_ratio'] is None: pe_text, pe_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
+    if data.get('pe_ratio') is None: pe_text, pe_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
     else:
         pe_text = f"{data['pe_ratio']:.1f} 倍"
         if data['pe_ratio'] > 30: total_score += 2; pe_alert = "🔴 極高 (2分)"
         elif data['pe_ratio'] > 26: total_score += 1; pe_alert = "🟡 偏高 (1分)"
         else: pe_alert = "🟢 合理 (0分)"
 
-    if data['yield_spread_bps'] is None: yield_text, yield_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
+    if data.get('yield_spread_bps') is None: yield_text, yield_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
     else:
         yield_text = f"{data['yield_spread_bps']:.1f} bps {data['yield_arrow']}"
         if data['yield_spread_bps'] < -50: total_score += 2; yield_alert = "🔴 深層倒掛 (2分)"
         elif data['yield_spread_bps'] < 0: total_score += 1; yield_alert = "🟡 倒掛 (1分)"
         else: yield_alert = "🟢 正常 (0分)"
 
-    if data['hy_oas'] is None: hy_text, hy_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
+    if data.get('hy_oas') is None: hy_text, hy_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
     else:
         hy_text = f"{data['hy_oas']:+.2f}% {data['hy_arrow']}"
         if data['hy_oas'] < -3.5: total_score += 2; hy_alert = "🔴 信用市場劇烈重挫 (2分)"
         elif data['hy_oas'] < -1.5: total_score += 1; hy_alert = "🟡 信用動能趨緩跌幅過大 (1分)"
         else: hy_alert = "🟢 信用穩健/溫和擴張 (0分)"
 
-    if data['twd_bias_pct'] is None: twd_text, twd_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
+    if data.get('twd_bias_pct') is None: twd_text, twd_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
     else:
         twd_text = f"{data['twd_fx']:.3f} ({data['twd_bias_pct']:+.2f}% 偏離) {data['twd_arrow']}"
         if data['twd_bias_pct'] > 1.5: total_score += 2; twd_alert = "🔴 資金極端外流/大幅超貶 (2分)"
         elif data['twd_bias_pct'] > 0.5: total_score += 1; twd_alert = "🟡 匯率趨貶/偏離常軌 (1分)"
         else: twd_alert = "🟢 匯率穩健/資金回流區間 (0分)"
 
-    if data['tw_bias'] is None: tw_text, tw_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
+    if data.get('tw_bias') is None: tw_text, tw_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
     else:
         tw_text = f"{data['tw_bias']:.2f}% {data['tw_bias_arrow']}"
         if data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0: total_score += 2; tw_alert = "🔴 短線極端過熱/超跌 (2分)"
         elif data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0: total_score += 1; tw_alert = "🟡 乖離偏大注意修正 (1分)"
         else: tw_alert = "🟢 正常軌道內 (0分)"
 
-    # 🛠️ 修正 3：新增 risk_history.json 歷史風險動態軌跡讀寫比對邏輯
+    # --- 歷史風險軌跡讀寫比對 ---
     risk_file = "risk_history.json"
     yesterday_score_text = "🔄 初次觀測啟動"
     
@@ -239,19 +254,17 @@ def get_risk_control_report(df):
     else:
         risk_history = {"records": []}
 
-    # 寫入今日最新風險總分
     try:
         risk_history["records"].append({
             "date": taiwan_time.strftime("%Y-%m-%d"),
             "total_score": total_score
         })
-        risk_history["records"] = risk_history["records"][-90:] # 滾動保留 90 天
+        risk_history["records"] = risk_history["records"][-90:]
         with open(risk_file, "w", encoding="utf-8") as f:
             json.dump(risk_history, f, ensure_ascii=False, indent=4)
     except Exception as e:
         print("儲存 risk_history.json 失敗:", e)
 
-    # 決定核心風控總指揮燈號
     if total_score >= 9: status_light = f"🔴 【四級總經極端風暴紅燈】停利回收現金"
     elif total_score >= 6: status_light = f"🟠 【三級總經高風險橘燈】減碼/停止不定期加碼"
     elif total_score >= 3: status_light = f"🟡 【二級總經市場觀望黃燈】暫緩用大資金盲目追高"
@@ -275,20 +288,20 @@ def get_risk_control_report(df):
     )
     
     if is_monthly_check:
-        buffett_alert = "🟢 安全" if data['buffett_indicator'] < 190 else "🟡 歷史高位"
-        bias_alert = "🟢 正常" if data['sp500_ma_bias'] < 15 else "🟡 乖離過大"
+        buffett_alert = "🟢 安全" if data.get('buffett_indicator', 185) < 190 else "🟡 歷史高位"
+        bias_alert = "🟢 正常" if data.get('sp500_ma_bias', 12.5) < 15 else "🟡 乖離過大"
         report += (
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
             f"📅 【每月 1 號大盤長週期體檢】\n"
-            f"• 巴菲特指數: {data['buffett_indicator']:.1f}% -> {buffett_alert}\n"
-            f"• 標普500 2年均線乖離率: {data['sp500_ma_bias']:.1f}% -> {bias_alert}\n"
+            f"• 巴菲特指數: {data.get('buffett_indicator', 185.0):.1f}% -> {buffett_alert}\n"
+            f"• 標普500 2年均線乖離率: {data.get('sp500_ma_bias', 12.5):.1f}% -> {bias_alert}\n"
         )
         
     report += "⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n💡 哨兵提示：本系統已全面活化「跨市場分數加權制」，協助您排除單一雜訊、落實極致冷靜的科學紀律。"
     return report
 
 # =========================================================================
-# 📊 第二大核心：資產再平衡決策哨兵
+# 📊 第二大核心：資產再平衡決策哨兵 (🛠️ 導入休市日安全欄位機制與友善提示)
 # =========================================================================
 def get_rebalance_report(df):
     config_file = "config.json"
@@ -309,30 +322,56 @@ def get_rebalance_report(df):
     target_voo = 0.40      
     target_smh = 0.20      
 
+    # 🛠️ 修正 1：建立個別股價的存在性檢查內部函式
+    def safe_get_price(close_df, ticker):
+        if close_df is None or ticker not in close_df.columns:
+            raise KeyError(f"'{ticker}' 欄位不存在，可能為美股/台股休市日")
+        series = close_df[ticker].dropna()
+        if series.empty:
+            raise ValueError(f"'{ticker}' 數據為空，可能為休市或資料異常")
+        return float(series.iloc[-1])
+
     try:
-        if df.empty or 'Close' not in df: raise Exception("外部傳入的公用大數據資料庫為空")
+        # 如果全域大數據為空，模擬空 DataFrame 觸發 KeyError 走降級休市提示
+        if df is None or 'Close' not in df:
+            raise KeyError("全域共用大數據矩陣讀取失敗")
+            
         close_df = df['Close']
         
-        p_voo = float(close_df['VOO'].dropna().iloc[-1])
-        p_smh = float(close_df['SMH'].dropna().iloc[-1])
-        usd_to_twd = float(close_df['TWD=X'].dropna().iloc[-1])
+        # 🛠️ 修正 2：全數換上 safe_get_price 安全通道
+        p_voo = safe_get_price(close_df, 'VOO')
+        p_smh = safe_get_price(close_df, 'SMH')
+        usd_to_twd = safe_get_price(close_df, 'TWD=X')
         
-        # 🛟 專用特快通道獲取 00713 現價，徹底避開盤中大矩陣批次解析衝突
+        # 00713 特別管道獲取
         t_00713 = yf.Ticker("00713.TW")
         p_00713 = t_00713.fast_info.get('last_price') or t_00713.info.get('regularMarketPrice')
         if p_00713 is None:
             p_00713 = float(t_00713.history(period="5d")['Close'].dropna().iloc[-1])
             
-    except Exception as e:
-        print("資產再平衡取得即時現價崩潰:", e)
-        return f"❌ 系統錯誤：無法取得即時市場價格，再平衡計算中止。\n原因: {str(e)}"
+    except (KeyError, ValueError, Exception) as e:
+        # 🛠️ 修正 3：精準轉換為主任指導的「休市日友善提示」
+        print("資產再平衡觸發休市防禦保護:", e)
+        today = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+        return (
+            f"📅 【資產再平衡決策哨兵】\n"
+            f"⏰ 觀測時間：{today}\n"
+            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+            f"💤 今日美股/台股市場疑似休市或資料異常，\n"
+            f"   無法取得即時報報價，再平衡計算暫停。\n"
+            f"   明日開盤後將自動恢復正常運作。\n"
+            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+            f"📋 原始錯誤訊息（供除錯參考）：{str(e)}"
+        )
 
     def calc_5d_pct(ticker_name, is_tw=False):
         try:
             if is_tw:
                 series = yf.Ticker(ticker_name).history(period="8d")['Close'].dropna()
+            elif df is not None and 'Close' in df and ticker_name in df['Close'].columns:
+                series = df['Close'][ticker_name].dropna()
             else:
-                series = close_df[ticker_name].dropna()
+                series = yf.Ticker(ticker_name).history(period="8d")['Close'].dropna()
                 
             if len(series) >= 6:
                 pct = ((series.iloc[-1] - series.iloc[-6]) / series.iloc[-6]) * 100
@@ -380,7 +419,6 @@ def get_rebalance_report(df):
                 numeric_pct = float(pct_5d.replace('%', ''))
                 is_up = numeric_pct >= 0
             except (ValueError, AttributeError) as ex:
-                print("解析5日漲跌幅字串異常:", ex)
                 is_up = True
             reason = "主因為股價劇烈上漲被動稀釋" if (dev_val * (1 if is_up else -1)) > 0 else "真實資金配置失衡"
             return f"🔴 建議調整 (偏離 {dev_val:+.1f}%)", f"近5日漲跌: {pct_5d}，{reason}", True
@@ -525,17 +563,22 @@ def send_line_message(message_text):
             print(f"分段 {idx+1} 傳送時爆發異常:", e)
 
 # =========================================================================
-# 🚀 核心控制台：全市場大數據打包 (包含 W5000，排除台股避免即時衝突)
+# 🚀 核心控制台
 # =========================================================================
 def main():
+    shared_df = None
     try:
-        print("正在向 Yahoo 伺服器申請共用大數據矩陣 (已加入 W5000 打包)...")
-        # 🛠️ 將 "^W5000" 直接納入打包清單，並保持排除 00713.TW 走特快獨立通道
+        print("正在向 Yahoo 伺服器申請共用大數據矩陣...")
         tickers = ["^VIX", "SPY", "^GSPC", "^TNX", "^2Y", "HYG", "TWD=X", "^TWII", "^W5000"]
         shared_df = yf.download(tickers, period="50d", progress=False)
-        print("大數據矩陣打包成功！")
+        
+        if shared_df is None or shared_df.empty or 'Close' not in shared_df:
+            print("警告：Yahoo 批次下載回傳無效資料，強制切換至【全面獨立備援通道】模式。")
+            shared_df = None
+        else:
+            print("大數據矩陣打包成功！")
     except Exception as e:
-        print("全域大數據矩陣下載崩潰，改以空載入分流:", e)
+        print("全域大數據矩陣下載崩潰，改以空載入分流備援線路:", e)
         shared_df = None
 
     risk_report = get_risk_control_report(shared_df)
