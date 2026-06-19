@@ -20,7 +20,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (🛠️ 已修正：全面排除 NoneType 比較盲點)
+# 🧠 第一大核心：總經加權風控塔台 (🚀 升級：終極即時快照三層備援與 300bps 熔斷)
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -66,41 +66,85 @@ def get_risk_control_report(df):
     except:
         data['pe_ratio'] = None
 
-    # --- 3. 10Y-2Y 美債利差 ---
+    # --- 3. 10Y-2Y 美債利差 (🛠️ 依照終極即時快照優先策略重寫) ---
+    t10_val, t02_val = None, None
+    t10_src, t02_src = "未取得", "未取得"
+    
+    t10_tk = yf.Ticker("^TNX")
+    t02_tk = yf.Ticker("^2Y")
+
+    # 【10Y 抓取線路】
     try:
-        t10_series, t02_series = None, None
-        if df is not None and 'Close' in df and '^TNX' in df['Close'].columns and '^2Y' in df['Close'].columns:
-            t10_series = df['Close']['^TNX'].dropna()
-            t02_series = df['Close']['^2Y'].dropna()
-
-        if t10_series is None or t10_series.empty:
-            t10_series = yf.Ticker("^TNX").history(period="15d")['Close'].dropna()
-        if t02_series is None or t02_series.empty:
-            t02_series = yf.Ticker("^2Y").history(period="15d")['Close'].dropna()
-
-        if t10_series is not None and not t10_series.empty and t02_series is not None and not t02_series.empty:
-            date_10 = t10_series.index[-1].to_pydatetime() if hasattr(t10_series.index[-1], 'to_pydatetime') else t10_series.index[-1]
-            date_02 = t02_series.index[-1].to_pydatetime() if hasattr(t02_series.index[-1], 'to_pydatetime') else t02_series.index[-1]
-            if date_10.tzinfo is not None: date_10 = date_10.replace(tzinfo=None)
-            if date_02.tzinfo is not None: date_02 = date_02.replace(tzinfo=None)
+        # 第一層：fast_info 快照
+        t10_val = t10_tk.fast_info.get('last_price')
+        if t10_val is not None: t10_src = "快照通道 (fast_info)"
+        
+        # 第二層：info 快照
+        if t10_val is None:
+            t10_val = t10_tk.info.get('regularMarketPrice') or t10_tk.info.get('previousClose')
+            if t10_val is not None: t10_src = "快照通道 (info)"
             
-            if abs((date_10 - date_02).days) > 3:
-                raise Exception("美債數據不同步超過3天")
-                
-            t10_val = float(t10_series.iloc[-1])
-            t02_val = float(t02_series.iloc[-1])
+        # 第三層：history 歷史線
+        if t10_val is None:
+            t10_hist = t10_tk.history(period="15d")['Close'].dropna()
+            if not t10_hist.empty:
+                t10_val = float(t10_hist.iloc[-1])
+                t10_src = "歷史線通道 (history)"
+    except Exception as ex:
+        print(f"提取 10Y 美債數據時發生預期外阻斷: {ex}")
+
+    # 【2Y 抓取線路】
+    try:
+        # 第一層：fast_info 快照
+        t02_val = t02_tk.fast_info.get('last_price')
+        if t02_val is not None: t02_src = "快照通道 (fast_info)"
+        
+        # 第二層：info 快照
+        if t02_val is None:
+            t02_val = t02_tk.info.get('regularMarketPrice') or t02_tk.info.get('previousClose')
+            if t02_val is not None: t02_src = "快照通道 (info)"
+            
+        # 第三層：history 歷史線
+        if t02_val is None:
+            t02_hist = t02_tk.history(period="15d")['Close'].dropna()
+            if not t02_hist.empty:
+                t02_val = float(t02_hist.iloc[-1])
+                t02_src = "歷史線通道 (history)"
+    except Exception as ex:
+        print(f"提取 2Y 美債數據時發生預期外阻斷: {ex}")
+
+    # 🛠️ 標註除錯 Log
+    print(f"📊 [美債利差診斷儀] 10Y來源: {t10_src} | 原始值: {t10_val}")
+    print(f"📊 [美債利差診斷儀] 2Y來源: {t02_src} | 原始值: {t02_val}")
+
+    try:
+        if t10_val is not None and t02_val is not None:
+            # 保留原本的「10倍放大BUG修正」邏輯
             if t10_val > 15: t10_val /= 10
             if t02_val > 15: t02_val /= 10
             
-            data['yield_spread_bps'] = round((t10_val - t02_val) * 100, 1)
-            min_len = min(len(t10_series), len(t02_series))
-            s10 = t10_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
-            s02 = t02_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
-            data['yield_arrow'] = get_trend_arrow(s10 - s02)
+            calc_spread_bps = round((t10_val - t02_val) * 100, 1)
+            
+            # 🛠️ 新增：合理性防呆檢查 (絕對值 > 300bps 視為異常熔斷)
+            if abs(calc_spread_bps) > 300.0:
+                raise ValueError(f"利差數值離譜防呆觸發: {calc_spread_bps} bps (可能存在單位不對稱異常)")
+                
+            data['yield_spread_bps'] = calc_spread_bps
+            
+            # 趨勢箭頭仍由歷史區間輔助
+            t10_arrow_series = t10_tk.history(period="15d")['Close'].dropna()
+            t02_arrow_series = t02_tk.history(period="15d")['Close'].dropna()
+            if not t10_arrow_series.empty and not t02_arrow_series.empty:
+                min_len = min(len(t10_arrow_series), len(t02_arrow_series))
+                s10 = t10_arrow_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
+                s02 = t02_arrow_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
+                data['yield_arrow'] = get_trend_arrow(s10 - s02)
+            else:
+                data['yield_arrow'] = "➡️"
         else:
-            raise Exception("美債序列空值")
+            raise Exception("未通過快照與歷史線完整路由")
     except Exception as e:
-        print("美債精算判定跳過:", e)
+        print(f"🚨 [美債利差核心報警] 計算中止。原因: {e}")
         data['yield_spread_bps'], data['yield_arrow'] = None, "⏳"
 
     # --- 4. 高收益債變化率 (HYG 近30日變化) ---
@@ -152,7 +196,6 @@ def get_risk_control_report(df):
     # 📆 月度核心量化指標數據抓取 (僅限每月 1 號)
     # =========================================================================
     if is_monthly_check:
-        # --- 7. 席勒 CAPE 比率 ---
         try:
             resp = requests.get("https://www.multpl.com/shiller-pe", timeout=10)
             soup = BeautifulSoup(resp.text, 'html.parser')
@@ -162,7 +205,6 @@ def get_risk_control_report(df):
             print(f"席勒CAPE 1號抓取攔截: {e}")
             data['shiller_cape'] = None
 
-        # --- 8. 修正版巴菲特指標 ---
         try:
             if df is not None and 'Close' in df and '^W5000' in df['Close'].columns:
                 w5000_series = df['Close']['^W5000'].dropna()
@@ -177,78 +219,62 @@ def get_risk_control_report(df):
         except:
             data['buffett_indicator'] = None
 
-        # --- 9. 紐約聯準會衰退機率 ---
         data['recession_prob'] = config_data.get("recession_probability_manual", None)
 
     # =========================================================================
-    # 🚦 燈號級距與加權總分計算核心 (🛠️ 精準移除 NoneType 比較風險)
+    # 🚦 燈號級距與加權總分計算
     # =========================================================================
     total_score = 0
 
-    # 1. VIX 燈號與計分
     if data.get('vix') is not None:
         vix_txt = f"{data['vix']:.2f} {data['vix_arrow']}"
         vix_l = "🔴" if data['vix'] > 30 else ("🟡" if data['vix'] > 20 else "🟢")
         total_score += 2 if data['vix'] > 30 else (1 if data['vix'] > 20 else 0)
-    else:
-        vix_txt, vix_l = "延遲 ⏳", "⚪"
+    else: vix_txt, vix_l = "延遲 ⏳", "⚪"
 
-    # 2. 標普 PE 燈號與計分
     if data.get('pe_ratio') is not None:
         pe_txt = f"{data['pe_ratio']:.1f}倍"
         pe_l = "🔴" if data['pe_ratio'] > 30 else ("🟡" if data['pe_ratio'] > 26 else "🟢")
         total_score += 2 if data['pe_ratio'] > 30 else (1 if data['pe_ratio'] > 26 else 0)
-    else:
-        pe_txt, pe_l = "延遲 ⏳", "⚪"
+    else: pe_txt, pe_l = "延遲 ⏳", "⚪"
 
-    # 3. 美債利差 燈號與計分 (🛠️ 完美修復點)
     if data.get('yield_spread_bps') is not None:
         yield_txt = f"{data['yield_spread_bps']:.1f} bps {data['yield_arrow']}"
         yield_l = "🔴" if data['yield_spread_bps'] < -50 else ("🟡" if data['yield_spread_bps'] < 0 else "🟢")
         total_score += 2 if data['yield_spread_bps'] < -50 else (1 if data['yield_spread_bps'] < 0 else 0)
     else:
-        yield_txt, yield_l = "延遲 ⏳", "⚪"
+        # 🛠️ 配合關鍵要求 5：若其他正常但美債仍是 None (延遲)，在 LINE 報告尾端主動增列本地明細
+        yield_txt = f"延遲 ⏳ (10Y:{t10_src} | 2Y:{t02_src})"
+        yield_l = "⚪"
 
-    # 4. HYG 燈號與計分
     if data.get('hy_oas') is not None:
         hy_txt = f"{data['hy_oas']:+.2f}% {data['hy_arrow']}"
         hy_l = "🔴" if data['hy_oas'] < -3.5 else ("🟡" if data['hy_oas'] < -1.5 else "🟢")
         total_score += 2 if data['hy_oas'] < -3.5 else (1 if data['hy_oas'] < -1.5 else 0)
-    else:
-        hy_txt, hy_l = "延遲 ⏳", "⚪"
+    else: hy_txt, hy_l = "延遲 ⏳", "⚪"
 
-    # 5. TWD匯率 燈號與計分
     if data.get('twd_bias_pct') is not None:
         twd_txt = f"{data['twd_fx']:.2f} ({data['twd_bias_pct']:+.1f}%) {data['twd_arrow']}"
         twd_l = "🔴" if data['twd_bias_pct'] > 1.5 else ("🟡" if data['twd_bias_pct'] > 0.5 else "🟢")
         total_score += 2 if data['twd_bias_pct'] > 1.5 else (1 if data['twd_bias_pct'] > 0.5 else 0)
-    else:
-        twd_txt, twd_l = "延遲 ⏳", "⚪"
+    else: twd_txt, twd_l = "延遲 ⏳", "⚪"
 
-    # 6. 台股乖離 燈號與計分
     if data.get('tw_bias') is not None:
         tw_txt = f"{data['tw_bias']:.1f}% {data['tw_bias_arrow']}"
         tw_l = "🔴" if (data['tw_bias'] > 6 or data['tw_bias'] < -8) else ("🟡" if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5) else "🟢")
         total_score += 2 if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else (1 if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else 0)
-    else:
-        tw_txt, tw_l = "延遲 ⏳", "⚪"
+    else: tw_txt, tw_l = "延遲 ⏳", "⚪"
 
-    # 🛠️ 長週期指標動態加總判定 (僅限 1 號)
     if is_monthly_check:
         if data.get('shiller_cape') is not None:
             c_val = data['shiller_cape']
-            c_s = 0 if c_val < 25 else (1 if c_val < 32 else (2 if c_val < 40 else 3))
-            total_score += c_s
-            
+            total_score += 0 if c_val < 25 else (1 if c_val < 32 else (2 if c_val < 40 else 3))
         if data.get('buffett_indicator') is not None:
             b_val = data['buffett_indicator']
-            b_s = 0 if b_val < 100 else (1 if b_val < 150 else (2 if b_val < 200 else 3))
-            total_score += b_s
-            
+            total_score += 0 if b_val < 100 else (1 if b_val < 150 else (2 if b_val < 200 else 3))
         if data.get('recession_prob') is not None:
             r_val = data['recession_prob']
-            r_s = 0 if r_val < 15 else (1 if r_val < 30 else (2 if r_val < 50 else 3))
-            total_score += r_s
+            total_score += 0 if r_val < 15 else (1 if r_val < 30 else (2 if r_val < 50 else 3))
 
         if total_score >= 15: status_light = "🔴 【四級極端風暴】停利回收現金"
         elif total_score >= 10: status_light = "🟠 【三級高風險】減碼/停止加碼"
@@ -284,9 +310,7 @@ def get_risk_control_report(df):
         with open(risk_file, "w", encoding="utf-8") as f: json.dump(risk_history, f, ensure_ascii=False, indent=4)
     except: pass
 
-    # =========================================================================
-    # 🖨️ 報告排版分層輸出
-    # =========================================================================
+    # 排版輸出
     report = (
         f"🚨 【unclelee 總經加權風控塔台】\n"
         f"⏰ {taiwan_time.strftime('%m-%d %H:%M')} | 📉 軌跡: {yesterday_score_text}\n"
@@ -320,7 +344,6 @@ def get_risk_control_report(df):
             f"📌 提醒：請記得每月更新衰退機率數據\n"
             f"  (查詢: https://www.newyorkfed.org/research/capital_markets/ycfaq#/interactive)\n"
         )
-        
     return report
 
 # =========================================================================
@@ -362,7 +385,7 @@ def get_rebalance_report(df):
         try: p_00713 = float(t_00713.history(period="10d")['Close'].dropna().iloc[-1])
         except: p_00713 = None
 
-    us_market_status = "正常 ✅" if p_voo and p_smh else "休市 💤"
+    us_market_status = "正常交易 ✅" if p_voo and p_smh else "休市 💤"
 
     def calc_5d_pct(ticker_name, is_tw=False):
         try:
@@ -381,9 +404,6 @@ def get_rebalance_report(df):
     pct_00713 = calc_5d_pct('00713.TW', is_tw=True)
     pct_voo = calc_5d_pct('VOO') if p_voo else "暫停"
     pct_smh = calc_5d_pct('SMH') if p_smh else "暫停"
-
-    taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
-    is_ex_dividend_day = (taiwan_time.month in [3, 6, 9, 12] and 15 <= taiwan_time.day <= 20)
 
     v_00713 = shares_00713 * p_00713 if p_00713 else 0
     v_voo = shares_voo * p_voo * usd_to_twd if p_voo else 0
