@@ -21,7 +21,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (🛠️ 升級美債利差 fast_info 即時價補救機制)
+# 🧠 第一大核心：總經加權風控塔台 (升級美債利差 fast_info 即時價補救機制)
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -58,7 +58,7 @@ def get_risk_control_report(df):
         print("PE 擷取失敗，啟動標普回推備援:", e)
         data['pe_ratio'] = None
 
-    # --- 3. 10Y-2Y 美債利差 (🛠️ 雙層精密即時報價防禦) ---
+    # --- 3. 10Y-2Y 美債利差 (雙層精密即時報價防禦) ---
     try:
         t10_val, t02_val = None, None
         t10_series, t02_series = None, None
@@ -306,7 +306,7 @@ def get_risk_control_report(df):
     return report
 
 # =========================================================================
-# 📊 第二大核心：資產再平衡決策哨兵
+# 📊 第二大核心：資產再平衡決策哨兵 (🚀 極致壓縮精簡排版版)
 # =========================================================================
 def get_rebalance_report(df):
     config_file = "config.json"
@@ -341,8 +341,7 @@ def get_rebalance_report(df):
             if not fallback_series.empty:
                 return float(fallback_series.iloc[-1])
         except Exception as ex:
-            print(f"🚨 獨立通道擷取 {ticker} 失敗 (可能為休市或無網路): {ex}")
-        
+            print(f"🚨 獨立通道擷取 {ticker} 失敗: {ex}")
         return None
 
     close_df = df['Close'] if (df is not None and 'Close' in df) else None
@@ -356,14 +355,13 @@ def get_rebalance_report(df):
     if p_00713 is None:
         try:
             p_00713 = float(t_00713.history(period="5d")['Close'].dropna().iloc[-1])
-        except Exception as ex:
-            print("台股 00713 價格全通道斷線:", ex)
+        except:
             p_00713 = None
 
     if p_voo and p_smh:
-        us_market_status = "正常開盤交易 (數據已自動補齊對齊 ✅)"
+        us_market_status = "正常交易 ✅"
     else:
-        us_market_status = "💤 美股市場休市日 / 數據伺服器異常中"
+        us_market_status = "💤 休市日/延遲"
 
     def calc_5d_pct(ticker_name, is_tw=False):
         try:
@@ -378,7 +376,7 @@ def get_rebalance_report(df):
                 return f"{'+' if pct >= 0 else ''}{pct:.1f}%"
         except:
             pass
-        return "暫無數據"
+        return "暫無"
 
     pct_00713 = calc_5d_pct('00713.TW', is_tw=True)
     pct_voo = calc_5d_pct('VOO') if p_voo else "暫停"
@@ -408,85 +406,72 @@ def get_rebalance_report(df):
     dev_voo = (act_voo - target_voo) * 100
     dev_smh = (act_smh - target_smh) * 100
 
-    def judge_deviation(dev_val, pct_5d, has_price, is_00713=False):
-        if not has_price:
-            return "💤 休市/斷線維持原狀", "無即時報價，系統自動沿用最後已知權重進行觀察", False
+    def judge_deviation_short(dev_val, is_00713=False):
         if is_00713 and is_ex_dividend_day:
-            return "🟢 正常 (除息日保護中)", "今日為00713除息日，比例微幅波動屬常態", False
-            
+            return "🟢 正常", "除息日保護中"
         abs_dev = abs(dev_val)
         if abs_dev > 5.0:
-            return f"🔴 建議調整 (偏離 {dev_val:+.1f}%)", f"近5日幅: {pct_5d}，配置觸及再平衡風控線", True
+            return f"🔴 調整 ({dev_val:+.1f}%)", "配置超越風控線"
         elif abs_dev > 2.0:
-            return f"⚠️ 觀察中 (偏離 {dev_val:+.1f}%)", f"近5日幅: {pct_5d}，常規市場波動", False
+            return f"⚠️ 觀察 ({dev_val:+.1f}%)", "常規波動"
         else:
-            return f"🟢 正常 (偏離 {dev_val:+.1f}%)", "資產比例完美契合既定配置目標", False
+            return f"🟢 正常 ({dev_val:+.1f}%)", "契合配置目標"
 
-    status_00713, note_00713, trigger_00713 = judge_deviation(dev_00713, pct_00713, p_00713 is not None, is_00713=True)
-    status_voo, note_voo, trigger_voo = judge_deviation(dev_voo, pct_voo, p_voo is not None)
-    status_smh, note_smh, trigger_smh = judge_deviation(dev_smh, pct_smh, p_smh is not None)
+    status_00713, note_00713 = judge_deviation_short(dev_00713, is_00713=True)
+    status_voo, note_voo = judge_deviation_short(dev_voo)
+    status_smh, note_smh = judge_deviation_short(dev_smh)
 
-    p_00713_txt = f"{p_00713:.2f} TWD" if p_00713 else "數據源連線延遲 ⏳"
-    p_voo_txt = f"{p_voo:.2f} USD" if p_voo else "💤 休市/無即時報價"
-    p_smh_txt = f"{p_smh:.2f} USD" if p_smh else "💤 休市/無即時報價"
+    p_00713_txt = f"{p_00713:.2f} TWD" if p_00713 else "延遲"
+    p_voo_txt = f"{p_voo:.2f} USD" if p_voo else "休市"
+    p_smh_txt = f"{p_smh:.2f} USD" if p_smh else "休市"
 
     report = (
         f"📊 【unclelee 資產再平衡決策哨兵】\n"
-        f"⏰ 觀測時間 (台灣): {taiwan_time.strftime('%Y-%m-%d %H:%M')}\n"
-        f"🇺🇸 美股觀測狀態: {us_market_status}\n"
-        f"💵 即時美金匯率: {usd_to_twd:.2f} TWD\n"
-        f"💰 組合估算總市值：NT$ {round(total_portfolio_value):,} 元\n"
+        f"⏰ 觀測時間: {taiwan_time.strftime('%Y-%m-%d %H:%M')} | 美股: {us_market_status}\n"
+        f"💵 匯率: {usd_to_twd:.2f} TWD | 💰 總市值: NT$ {round(total_portfolio_value):,} 元\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         f"🔍 【核心量化分項指標體檢】\n\n"
-        f"• 00713 元大高息低波:\n"
-        f"  🧮 算式: {shares_00713:,} 股 × {p_00713_txt}\n"
-        f"  💎 實際台幣價值: NT$ {round(v_00713):,} 元\n"
-        f"  📊 實際比例 (目標): {act_00713*100:.1f}% ({target_00713*100:.0f}%)\n"
-        f"  🚦 風控狀態: {status_00713}\n"
-        f"  💡 {note_00713}\n\n"
-        f"• VOO 標普500:\n"
-        f"  🧮 算式: {shares_voo:,} 股 × {p_voo_txt}\n"
-        f"  💎 實際台幣價值: NT$ {round(v_voo):,} 元\n"
-        f"  📊 實際比例 (目標): {act_voo*100:.1f}% ({target_voo*100:.0f}%)\n"
-        f"  🚦 風控狀態: {status_voo}\n"
-        f"  💡 {note_voo}\n\n"
-        f"• SMH 費城半導體:\n"
-        f"  🧮 算式: {shares_smh:,} 股 × {p_smh_txt}\n"
-        f"  💎 實際台幣價值: NT$ {round(v_smh):,} 元\n"
-        f"  📊 實際比例 (目標): {act_smh*100:.1f}% ({target_smh*100:.0f}%)\n"
-        f"  🚦 風控狀態: {status_smh}\n"
-        f"  💡 {note_smh}\n"
+        f"• 00713 元大高息低波 ({shares_00713:,}股 × {p_00713_txt})\n"
+        f"  💰 價值: NT$ {round(v_00713):,} 元 | 比率: {act_00713*100:.1f}% (目標 {target_00713*100:.0f}%)\n"
+        f"  🚦 風控: {status_00713} | {note_00713}\n\n"
+        f"• VOO 標普500 ({shares_voo:,}股 × {p_voo_txt})\n"
+        f"  💰 價值: NT$ {round(v_voo):,} 元 | 比率: {act_voo*100:.1f}% (目標 {target_voo*100:.0f}%)\n"
+        f"  🚦 風控: {status_voo} | {note_voo}\n\n"
+        f"• SMH 費城半導體 ({shares_smh:,}股 × {p_smh_txt})\n"
+        f"  💰 價值: NT$ {round(v_smh):,} 元 | 比率: {act_smh*100:.1f}% (目標 {target_smh*100:.0f}%)\n"
+        f"  🚦 風控: {status_smh} | {note_smh}\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         f"🛠️ 演算法一鍵指引建議：\n"
     )
 
     if p_voo and p_smh and p_00713:
+        trigger_00713 = abs(dev_00713) > 5.0 and not is_ex_dividend_day
+        trigger_voo = abs(dev_voo) > 5.0
+        trigger_smh = abs(dev_smh) > 5.0
         any_trigger = trigger_00713 or trigger_voo or trigger_smh
         
-        t_shares_00713 = round((total_portfolio_value * target_00713 - v_00713) / p_00713)
-        t_cost_00713 = total_portfolio_value * target_00713 - v_00713
-        
-        t_shares_voo = round((total_portfolio_value * target_voo - v_voo) / (p_voo * usd_to_twd))
-        t_cost_voo = total_portfolio_value * target_voo - v_voo
-        
-        t_shares_smh = round((total_portfolio_value * target_smh - v_smh) / (p_smh * usd_to_twd))
-        t_cost_smh = total_portfolio_value * target_smh - v_smh
-        
         if any_trigger:
+            t_shares_00713 = round((total_portfolio_value * target_00713 - v_00713) / p_00713)
+            t_cost_00713 = total_portfolio_value * target_00713 - v_00713
+            t_shares_voo = round((total_portfolio_value * target_voo - v_voo) / (p_voo * usd_to_twd))
+            t_cost_voo = total_portfolio_value * target_voo - v_voo
+            t_shares_smh = round((total_portfolio_value * target_smh - v_smh) / (p_smh * usd_to_twd))
+            t_cost_smh = total_portfolio_value * target_smh - v_smh
+
             def format_trade_msg(shares, cost):
-                if shares > 0: return f"🟢 應補進 +{shares} 股 (約需投入 NT$ {round(cost):,})"
-                elif shares < 0: return f"🔴 應減碼 {shares} 股 (約可回收 NT$ {round(abs(cost)):,})"
-                return "➡️ 比例精準，無需變動"
+                if shares > 0: return f"🟢 補進 +{shares} 股 (約需 NT$ {round(cost):,})"
+                elif shares < 0: return f"🔴 減碼 {shares} 股 (約回收 NT$ {round(abs(cost)):,})"
+                return "➡️ 無需變動"
             report += (
-                f"🎯 偵測到配置偏離度大於 5%，請執行以下精確平衡交易：\n"
+                f"🎯 偏離 >5%，請執行再平衡交易：\n"
                 f"1. 00713: {format_trade_msg(t_shares_00713, t_cost_00713)}\n"
                 f"2. VOO  : {format_trade_msg(t_shares_voo, t_cost_voo)}\n"
                 f"3. SMH  : {format_trade_msg(t_shares_smh, t_cost_smh)}\n"
             )
         else:
-            report += "⚖️ 當前全資產偏離度皆控制在 ±5% 內，配置極度穩健，【今日建議不執行任何交易】。\n"
+            report += "⚖️ 全資產偏離度皆控制在 ±5% 內，【今日建議不執行交易】。\n"
     else:
-        report += "💤 【交易指引暫停提示】：因今日特定海外數據未完全對齊或休市，為防止市場收盤時間差導致不對稱交易，今日「不提供具體買賣股數建議」，資產比例體檢仍供參考。\n"
+        report += "💤 部分市場未開盤，今日「不提供具體交易股數建議」。\n"
 
     history_file = "rebalance_history.json"
     history_data = {"total_count": 0, "total_cost": 0.0, "records": []}
@@ -497,10 +482,9 @@ def get_rebalance_report(df):
 
     report += (
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"📊 本年度已執行再平衡：{history_data['total_count']} 次\n"
-        f"📊 本年度累積已實現成本：約 NT$ {round(history_data['total_cost']):,}\n"
+        f"📊 本年度已執行再平衡：{history_data['total_count']} 次 | 累積已實現成本：約 NT$ {round(history_data['total_cost']):,}\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"💡 決策大腦：本模組已全面活化「多層備援抓取技術」，自動排除 Yahoo 伺服器對齊錯誤，全天候守護您的資產平衡。"
+        f"💡 決策大腦：本模組已全面活化「多層備援抓取技術」，全天候守護您的資產配置。"
     )
     return report
 
