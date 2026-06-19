@@ -98,15 +98,14 @@ def get_risk_control_report(df):
         print("美債利差精算失敗:", e)
         data['yield_spread_bps'], data['yield_arrow'] = None, "⏳"
 
-    # --- 4. 修改：高收益債變化率 (HYG 近30日變化) ---
+    # --- 4. 高收益債變化率 (HYG 近30日變化) ---
     try:
         hyg_series = df['Close']['HYG'].dropna()
-        # 計算近 30 個交易日的變化率
         if len(hyg_series) >= 30:
             current_hyg = hyg_series.iloc[-1]
             past_hyg = hyg_series.iloc[-30]
             hyg_pct_30d = ((current_hyg - past_hyg) / past_hyg) * 100
-            data['hy_oas'] = round(hyg_pct_30d, 2)  # 借用原本變數名避免大幅改動後續結構
+            data['hy_oas'] = round(hyg_pct_30d, 2)  
             data['hy_arrow'] = get_trend_arrow(hyg_series)
         else:
             raise Exception("HYG 歷史長度不足 30 天")
@@ -114,11 +113,10 @@ def get_risk_control_report(df):
         print("HYG 近30日變動率擷取失敗:", e)
         data['hy_oas'], data['hy_arrow'] = None, "⏳"
 
-    # --- 5. 修改：台幣兌美元匯率 (近30日均值動態偏離度) ---
+    # --- 5. 台幣兌美元匯率 (近30日均值動態偏離度) ---
     try:
         twd_series = df['Close']['TWD=X'].dropna()
         current_twd = float(twd_series.iloc[-1])
-        # 計算近 30 日收盤均價
         if len(twd_series) >= 30:
             ma_30_twd = twd_series.iloc[-30:].mean()
             twd_bias_pct = ((current_twd - ma_30_twd) / ma_30_twd) * 100
@@ -190,7 +188,6 @@ def get_risk_control_report(df):
         elif data['yield_spread_bps'] < 0: total_score += 1; yield_alert = "🟡 倒掛 (1分)"
         else: yield_alert = "🟢 正常 (0分)"
 
-    # 新判定邏輯：高收益債 30日漲跌幅 (大跌代表信用風險飆高)
     if data['hy_oas'] is None: hy_text, hy_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
     else:
         hy_text = f"{data['hy_oas']:+.2f}% {data['hy_arrow']}"
@@ -198,7 +195,6 @@ def get_risk_control_report(df):
         elif data['hy_oas'] < -1.5: total_score += 1; hy_alert = "🟡 信用動能趨緩跌幅過大 (1分)"
         else: hy_alert = "🟢 信用穩健/溫和擴張 (0分)"
 
-    # 新判定邏輯：台幣匯率 30日均線偏離幅度 (暴貶代表資金大舉外流)
     if data['twd_bias_pct'] is None: twd_text, twd_alert = "數據擷取延遲 ⏳", "⚪ 觀測中"
     else:
         twd_text = f"{data['twd_fx']:.3f} ({data['twd_bias_pct']:+.2f}% 偏離) {data['twd_arrow']}"
@@ -248,6 +244,251 @@ def get_risk_control_report(df):
     return report
 
 # =========================================================================
-# 📊 第二大核心：資產再平衡決策哨兵 (使用共用 df 杜絕 Yahoo 二次封鎖)
+# 📊 第二大核心：資產再平衡決策哨兵
 # =========================================================================
-def get_rebalance_
+def get_rebalance_report(df):
+    config_file = "config.json"
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+            shares_00713 = config_data.get("shares_00713", 10153)
+            shares_voo = config_data.get("shares_voo", 28)
+            shares_smh = config_data.get("shares_smh", 15)
+        except Exception as e:
+            print("讀取 config.json 發生異常:", e)
+            return f"❌ 系統錯誤：讀取 config.json 失敗。\n原因: {str(e)}"
+    else:
+        shares_00713, shares_voo, shares_smh = 10153, 28, 15
+
+    target_00713 = 0.40
+    target_voo = 0.40      
+    target_smh = 0.20      
+
+    try:
+        if df.empty or 'Close' not in df: raise Exception("外部傳入的公用大數據資料庫為空")
+        close_df = df['Close']
+        p_00713 = float(close_df['00713.TW'].dropna().iloc[-1])
+        p_voo = float(close_df['VOO'].dropna().iloc[-1])
+        p_smh = float(close_df['SMH'].dropna().iloc[-1])
+        usd_to_twd = float(close_df['TWD=X'].dropna().iloc[-1])
+    except Exception as e:
+        print("資產再平衡取得即時現價崩潰:", e)
+        return f"❌ 系統錯誤：無法取得即時市場價格，再平衡計算中止。\n原因: {str(e)}"
+
+    def calc_5d_pct(ticker_name):
+        try:
+            series = close_df[ticker_name].dropna()
+            if len(series) >= 6:
+                pct = ((series.iloc[-1] - series.iloc[-6]) / series.iloc[-6]) * 100
+                return f"{'+' if pct >= 0 else ''}{pct:.1f}%"
+        except Exception as ex:
+            print(f"{ticker_name} 計算5日漲跌幅異常:", ex)
+        return "暫無數據"
+
+    pct_00713 = calc_5d_pct('00713.TW')
+    pct_voo = calc_5d_pct('VOO')
+    pct_smh = calc_5d_pct('SMH')
+
+    taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
+    is_ex_dividend_day = False
+    try:
+        t_00713 = yf.Ticker("00713.TW")
+        divs = t_00713.dividends
+        if not divs.empty:
+            latest_div_date = divs.index[-1].date()
+            today_date = taiwan_time.date()
+            if 0 <= (today_date - latest_div_date).days <= 2: is_ex_dividend_day = True
+    except Exception as e:
+        print("配息紀錄擷取遭遇阻擋，啟動常規配息月防禦估算:", e)
+        if taiwan_time.month in [3, 6, 9, 12] and 15 <= taiwan_time.day <= 20: is_ex_dividend_day = True
+
+    v_00713 = shares_00713 * p_00713
+    v_voo = shares_voo * p_voo * usd_to_twd
+    v_smh = shares_smh * p_smh * usd_to_twd
+    total_portfolio_value = v_00713 + v_voo + v_smh
+
+    act_00713 = v_00713 / total_portfolio_value
+    act_voo = v_voo / total_portfolio_value
+    act_smh = v_smh / total_portfolio_value
+
+    dev_00713 = (act_00713 - target_00713) * 100
+    dev_voo = (act_voo - target_voo) * 100
+    dev_smh = (act_smh - target_smh) * 100
+
+    def judge_deviation(dev_val, pct_5d, is_00713=False):
+        if is_00713 and is_ex_dividend_day:
+            return "🟢 正常 (除息日保護中)", "今日為00713除息，比例變化為正常現象，暫不計入偏離判斷", False
+            
+        abs_dev = abs(dev_val)
+        if abs_dev > 5.0:
+            try:
+                numeric_pct = float(pct_5d.replace('%', ''))
+                is_up = numeric_pct >= 0
+            except (ValueError, AttributeError) as ex:
+                print("解析5日漲跌幅字串異常:", ex)
+                is_up = True
+            reason = "主因為股價劇烈上漲被動稀釋" if (dev_val * (1 if is_up else -1)) > 0 else "真實資金配置失衡"
+            return f"🔴 建議調整 (偏離 {dev_val:+.1f}%)", f"近5日漲跌: {pct_5d}，{reason}", True
+        elif abs_dev > 2.0:
+            return f"⚠️ 觀察中 (偏離 {dev_val:+.1f}%)", f"近5日漲跌: {pct_5d}，常規市場波動", False
+        else:
+            return f"🟢 正常 (偏離 {dev_val:+.1f}%)", "資產比例高度契合目標", False
+
+    status_00713, note_00713, trigger_00713 = judge_deviation(dev_00713, pct_00713, is_00713=True)
+    status_voo, note_voo, trigger_voo = judge_deviation(dev_voo, pct_voo)
+    status_smh, note_smh, trigger_smh = judge_deviation(dev_smh, pct_smh)
+
+    any_trigger = trigger_00713 or trigger_voo or trigger_smh
+
+    def calc_trade(target_ratio, actual_value, current_price, is_usd=False):
+        target_value = total_portfolio_value * target_ratio
+        diff_twd = target_value - actual_value
+        price_twd = current_price * (usd_to_twd if is_usd else 1)
+        trade_shares = round(diff_twd / price_twd)
+        actual_trade_twd = trade_shares * price_twd
+        return trade_shares, actual_trade_twd
+
+    t_shares_00713, t_cost_00713 = calc_trade(target_00713, v_00713, p_00713)
+    t_shares_voo, t_cost_voo = calc_trade(target_voo, v_voo, p_voo, is_usd=True)
+    t_shares_smh, t_cost_smh = calc_trade(target_smh, v_smh, p_smh, is_usd=True)
+
+    estimated_current_cost = abs(t_cost_00713) + abs(t_cost_voo) + abs(t_cost_smh)
+
+    # --- JSON 歷史記錄記帳層 ---
+    history_file = "rebalance_history.json"
+    history_data = {"total_count": 0, "total_cost": 0.0, "records": []}
+
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, "r", encoding="utf-8") as f: history_data = json.load(f)
+        except Exception as e:
+            print("讀取 rebalance_history.json 失敗，改用全新的初始容器:", e)
+
+    is_first_report_after_trade = False
+    if history_data["records"]:
+        last_record = history_data["records"][-1]
+        last_shares = last_record.get("shares_snapshot", {})
+        if last_shares:
+            if (last_shares.get("00713") != shares_00713 or 
+                last_shares.get("voo") != shares_voo or 
+                last_shares.get("smh") != shares_smh):
+                is_first_report_after_trade = True
+
+    if is_first_report_after_trade:
+        history_data["total_count"] += 1
+        if history_data["records"]:
+            history_data["total_cost"] += history_data["records"][-1].get("estimated_cost", 0)
+
+    new_record = {
+        "date": taiwan_time.strftime("%Y-%m-%d"),
+        "shares_snapshot": {"00713": shares_00713, "voo": shares_voo, "smh": shares_smh},
+        "ratios": {"00713": round(act_00713*100,1), "voo": round(act_voo*100,1), "smh": round(act_smh*100,1)},
+        "triggered": any_trigger,
+        "estimated_cost": round(estimated_current_cost) if any_trigger else 0
+    }
+    history_data["records"].append(new_record)
+
+    try:
+        with open(history_file, "w", encoding="utf-8") as f: json.dump(history_data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print("歷史記錄資料庫回存失敗:", e)
+
+    report = (
+        f"📊 【unclelee 資產再平衡決策哨兵】\n"
+        f"⏰ 觀測時間 (台灣): {taiwan_time.strftime('%Y-%m-%d %H:%M')}\n"
+        f"💵 即時美金匯率: {usd_to_twd:.2f} TWD\n"
+        f"💰 組合總市值：NT$ {round(total_portfolio_value):,} 元\n"
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"🔍 【核心量化分項指標體檢】\n\n"
+        f"• 00713 元大高息低波:\n"
+        f"  🧮 算式: {shares_00713:,} 股 × {p_00713:.2f} TWD\n"
+        f"  💎 實際台幣價值: NT$ {round(v_00713):,} 元\n"
+        f"  📊 實際比例 (目標): {act_00713*100:.1f}% ({target_00713*100:.0f}%)\n"
+        f"  🚦 風控狀態: {status_00713}\n"
+        f"  💡 {note_00713}\n\n"
+        f"• VOO 標普500:\n"
+        f"  🧮 算式: {shares_voo:,} 股 × {p_voo:.2f} USD\n"
+        f"  💎 實際台幣價值: NT$ {round(v_voo):,} 元\n"
+        f"  📊 實際比例 (目標): {act_voo*100:.1f}% ({target_voo*100:.0f}%)\n"
+        f"  🚦 風控狀態: {status_voo}\n"
+        f"  💡 {note_voo}\n\n"
+        f"• SMH 費城半導體:\n"
+        f"  🧮 算式: {shares_smh:,} 股 × {p_smh:.2f} USD\n"
+        f"  💎 實際台幣價值: NT$ {round(v_smh):,} 元\n"
+        f"  📊 實際比例 (目標): {act_smh*100:.1f}% ({target_smh*100:.0f}%)\n"
+        f"  🚦 風控狀態: {status_smh}\n"
+        f"  💡 {note_smh}\n"
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"🛠️ 演算法一鍵指引建議：\n"
+    )
+
+    if any_trigger:
+        def format_trade_msg(shares, cost):
+            if shares > 0: return f"🟢 應補進 +{shares} 股 (約需投入 NT$ {round(cost):,})"
+            elif shares < 0: return f"🔴 應減碼 {shares} 股 (約可回收 NT$ {round(abs(cost)):,})"
+            return "➡️ 比例精準，無需變動"
+        report += (
+            f"🎯 偵測到配置偏離度大於 5%，請執行以下精確平衡交易：\n"
+            f"1. 00713: {format_trade_msg(t_shares_00713, t_cost_00713)}\n"
+            f"2. VOO  : {format_trade_msg(t_shares_voo, t_cost_voo)}\n"
+            f"3. SMH  : {format_trade_msg(t_shares_smh, t_cost_smh)}\n"
+        )
+    else:
+        report += "⚖️ 當前全資產偏離度皆控制在 ±5% 內，配置非常穩健，【今日建議不執行任何交易】。\n"
+
+    report += (
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"📊 本年度已執行再平衡：{history_data['total_count']} 次\n"
+        f"📊 本年度累積已實現成本：約 NT$ {round(history_data['total_cost']):,}\n"
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"💡 決策大腦：資產數據與程式邏輯已完美抽離；現在只有在您實際修正 config.json 中的持股數時，系統才會正式結算再平衡的執行次數與成本。"
+    )
+    return report
+
+# =========================================================================
+# 📤 第三區塊：自動分段發送服務
+# =========================================================================
+def send_line_message(message_text):
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+    user_id = os.environ.get("LINE_USER_ID")
+    if not token or not user_id: 
+        print("LINE 憑證欄位缺失，中止傳送。")
+        return
+        
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+    
+    max_length = 4500
+    chunks = [message_text[i:i+max_length] for i in range(0, len(message_text), max_length)]
+    
+    for idx, chunk in enumerate(chunks):
+        payload = {"to": user_id, "messages": [{"type": "text", "text": chunk}]}
+        try: 
+            res = requests.post(url, headers=headers, json=payload)
+            print(f"分段 {idx+1}/{len(chunks)} 發送狀態碼: {res.status_code}")
+        except Exception as e: 
+            print(f"分段 {idx+1} 傳送時爆發異常:", e)
+
+# =========================================================================
+# 🚀 核心控制台：統一打包流暢通關
+# =========================================================================
+def main():
+    try:
+        print("正在向 Yahoo 伺服器申請共用大數據矩陣...")
+        tickers = ["^VIX", "SPY", "^GSPC", "^TNX", "^2Y", "HYG", "TWD=X", "^TWII"]
+        shared_df = yf.download(tickers, period="50d", progress=False)
+        print("大數據矩陣打包成功！")
+    except Exception as e:
+        print("全域大數據矩陣下載崩潰，改以空載入分流:", e)
+        shared_df = None
+
+    risk_report = get_risk_control_report(shared_df)
+    rebalance_report = get_rebalance_report(shared_df)
+    
+    combined_report = f"{risk_report}\n\n═══════════════════════════\n\n{rebalance_report}"
+    
+    send_line_message(combined_report)
+
+if __name__ == "__main__":
+    main()
