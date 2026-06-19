@@ -20,7 +20,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (🚀 升級：FRED 官方數據優先通道 + Yahoo 降級備援)
+# 🧠 第一大核心：總經加權風控塔台 (🚀 已修正第 51 行語法殘留字元 Bug)
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -52,13 +52,13 @@ def get_risk_control_report(df):
     except:
         data['vix'], data['vix_arrow'] = None, "⏳"
 
-    # --- 2. S&P 500 本益比 ---
+    # --- 2. S&P 500 本益比 (🛠️ 語法已完美修正，刪除殘留字元) ---
     try:
         spy = yf.Ticker("SPY")
         pe_val = spy.info.get('trailingPE') or spy.fast_info.get('trailing_pe') or spy.info.get('forwardPE')
         if pe_val and pe_val > 0: data['pe_ratio'] = float(pe_val)
         else:
-            if df is not None and 'Close' in df Ep and '^GSPC' in df['Close'].columns:
+            if df is not None and 'Close' in df and '^GSPC' in df['Close'].columns:
                 sp500_close = df['Close']['^GSPC'].dropna()
             else:
                 sp500_close = yf.Ticker("^GSPC").history(period="10d")['Close'].dropna()
@@ -66,7 +66,7 @@ def get_risk_control_report(df):
     except:
         data['pe_ratio'] = None
 
-    # --- 3. 10Y-2Y 美債利差 (⚔️ 重構：FRED 優先通道機制) ---
+    # --- 3. 10Y-2Y 美債利差 (FRED 優先通道機制) ---
     t10_val, t02_val = None, None
     t10_src, t02_src = "未取得", "未取得"
 
@@ -88,11 +88,11 @@ def get_risk_control_report(df):
             print(f"FRED {series_id} 抓取失敗: {e}")
             return None, f"FRED {series_id} 連線失敗"
 
-    # 🛠️ 第一層：嘗試從 FRED 獲取權威數據
+    # 第一層：嘗試從 FRED 獲取權威數據
     t10_val, t10_src = get_treasury_yield_from_fred("DGS10")
     t02_val, t02_src = get_treasury_yield_from_fred("DGS2")
 
-    # 🛠️ 第二層：若 FRED 失敗，退回原本的 Yahoo Finance 三層備援
+    # 第二層：若 FRED 失敗，退回原本的 Yahoo Finance 三層備援
     # 【10Y Yahoo 備援線路】
     if t10_val is None:
         try:
@@ -110,12 +110,11 @@ def get_risk_control_report(df):
                     t10_val = float(t10_hist.iloc[-1])
                     t10_src = "Yahoo備援(^TNX歷史線 history)"
             
-            # ⚠️ 10倍放大 BUG 修正邏輯：僅隔離在 Yahoo 備援線路中觸發
             if t10_val is not None and t10_val > 15: t10_val /= 10
         except Exception as ex:
             print(f"Yahoo 10Y 備援線路異常: {ex}")
 
-    # 【2Y Yahoo 備援線路 - 依照規格鎖定 2YY=F】
+    # 【2Y Yahoo 備援線路】
     if t02_val is None:
         try:
             t02_tk = yf.Ticker("2YY=F")
@@ -132,27 +131,24 @@ def get_risk_control_report(df):
                     t02_val = float(t02_hist.iloc[-1])
                     t02_src = "Yahoo備援(2YY=F歷史線 history)"
             
-            # ⚠️ 10倍放大 BUG 修正邏輯：僅隔離在 Yahoo 備援線路中觸發
             if t02_val is not None and t02_val > 15: t02_val /= 10
         except Exception as ex:
             print(f"Yahoo 2Y 備援線路異常: {ex}")
 
-    # 🛠️ 標註除錯 Log，供 Actions 精準追蹤管道狀態
+    # 標註除錯 Log
     print(f"📊 [美債利差診斷儀] 10Y最終來源: {t10_src} | 數值: {t10_val}")
     print(f"📊 [美債利差診斷儀] 2Y最終來源: {t02_src} | 數值: {t02_val}")
 
     try:
         if t10_val is not None and t02_val is not None:
-            # FRED 或經過歸一化後的 Yahoo 數據進行利差演算
             calc_spread_bps = round((t10_val - t02_val) * 100, 1)
             
-            # 合理性防呆檢查 (絕對值 > 300bps 視為異常熔斷)
+            # 合理性防呆檢查 (絕對值 > 300bps 視為異常)
             if abs(calc_spread_bps) > 300.0:
-                raise ValueError(f"利差數值離譜防呆觸發: {calc_spread_bps} bps (可能存在單位不對稱異常)")
+                raise ValueError(f"利差數值離譜防呆觸發: {calc_spread_bps} bps")
                 
             data['yield_spread_bps'] = calc_spread_bps
             
-            # 趨勢箭頭輔助提取 (使用常規網頁 history 生成)
             try:
                 t10_arrow_series = yf.Ticker("^TNX").history(period="15d")['Close'].dropna()
                 t02_arrow_series = yf.Ticker("2YY=F").history(period="15d")['Close'].dropna()
@@ -231,7 +227,6 @@ def get_risk_control_report(df):
             print(f"席勒CAPE 1號抓取攔截: {e}")
             data['shiller_cape'] = None
 
-        # 🛠️ 查證校正版巴菲特指標相對基準法 (點位 100% 契合大盤合理分層)
         try:
             if df is not None and 'Close' in df and '^W5000' in df['Close'].columns:
                 w5000_series = df['Close']['^W5000'].dropna()
@@ -514,7 +509,24 @@ def get_rebalance_report(df):
     return report
 
 # =========================================================================
-# 🚀 核心控制台 (🛠️ 已確保網路請求允許訪問 fred.stlouisfed.org)
+# 📤 第三區塊：自動分段發送服務
+# =========================================================================
+def send_line_message(message_text):
+    token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
+    user_id = os.environ.get("LINE_USER_ID")
+    if not token or not user_id: return
+        
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+    max_length = 4500
+    chunks = [message_text[i:i+max_length] for i in range(0, len(message_text), max_length)]
+    for chunk in chunks:
+        payload = {"to": user_id, "messages": [{"type": "text", "text": chunk}]}
+        try: requests.post(url, headers=headers, json=payload)
+        except: pass
+
+# =========================================================================
+# 🚀 核心控制台
 # =========================================================================
 def main():
     shared_df = None
