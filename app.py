@@ -6,19 +6,19 @@ import yfinance as yf
 
 def get_rebalance_report():
     # =========================================================================
-    # 📌 【1. 核心輸入區】請在此維持或更新李主任的精準在庫持股數與目標比例
+    # 📌 【1. 核心輸入區】李主任精準在庫持股數與黃金目標比例 (40%/40%/20%)
     # =========================================================================
-    shares_00713 = 10153
-    shares_voo = 25
-    shares_smh = 18
+    shares_00713 = 10153  # 已更新為最精準持股
+    shares_voo = 28       # 已校正回歸為 28 股
+    shares_smh = 15       # 已更新為 15 股
 
-    # 您的黃金配置目標比例 (總和必為 100%)
+    # 您的黃金配置目標比例 (總和為 100%)
     target_00713 = 0.40
-    target_voo = 0.35
-    target_smh = 0.25
+    target_voo = 0.40      
+    target_smh = 0.20      
 
     # =========================================================================
-    # 📌 【2. 數據獲取與緩衝區】下載 6 天歷史（確保涵蓋 5 個交易日漲跌幅）
+    # 📌 【2. 數據獲取與緩衝區】下載歷史K線以計算 5 日漲跌幅
     # =========================================================================
     try:
         tickers = ["00713.TW", "VOO", "SMH", "TWD=X"]
@@ -34,7 +34,7 @@ def get_rebalance_report():
     except Exception as e:
         return f"❌ 系統錯誤：無法取得即時市場價格，再平衡計算中止。\n原因: {str(e)}"
 
-    # 計算 5 日變動率 (最新收盤相較於 5 個交易日前)
+    # 計算 5 日變動率
     def calc_5d_pct(ticker_name):
         try:
             series = close_df[ticker_name].dropna()
@@ -59,19 +59,17 @@ def get_rebalance_report():
         t_00713 = yf.Ticker("00713.TW")
         divs = t_00713.dividends
         if not divs.empty:
-            # 檢查過去 3 天內或今天是否有除息紀錄
             latest_div_date = divs.index[-1].date()
             today_date = taiwan_time.date()
             days_diff = (today_date - latest_div_date).days
             if 0 <= days_diff <= 2:
                 is_ex_dividend_day = True
     except:
-        # 若 API 異常，採用歷史常規除息月份（3, 6, 9, 12月中旬）作為防禦性概算判定
         if taiwan_time.month in [3, 6, 9, 12] and 15 <= taiwan_time.day <= 20:
             is_ex_dividend_day = True
 
     # =========================================================================
-    # 📌 【4. 資產價值與精算核心（維持原有 Double Check 驗算）】
+    # 📌 【4. 資產價值與精算核心（Double Check 驗算機制）】
     # =========================================================================
     v_00713 = shares_00713 * p_00713
     v_voo = shares_voo * p_voo * usd_to_twd
@@ -91,7 +89,7 @@ def get_rebalance_report():
     # =========================================================================
     def judge_deviation(dev_val, pct_5d, is_00713=False):
         if is_00713 and is_ex_dividend_day:
-            return "🟢 正常 (除息日保護保護中)", "今日為00713除息，比例變化為正常現象，暫不計入偏離判斷", False
+            return "🟢 正常 (除息日保護中)", "今日為00713除息，比例變化為正常現象，暫不計入偏離判斷", False
             
         abs_dev = abs(dev_val)
         if abs_dev > 5.0:
@@ -123,7 +121,6 @@ def get_rebalance_report():
     t_shares_voo, t_cost_voo = calc_trade(target_voo, v_voo, p_voo, is_usd=True)
     t_shares_smh, t_cost_smh = calc_trade(target_smh, v_smh, p_smh, is_usd=True)
 
-    # 精算本次總調整所需的摩擦成本/交割款總額面額
     estimated_current_cost = abs(t_cost_00713) + abs(t_cost_voo) + abs(t_cost_smh)
 
     # =========================================================================
@@ -139,7 +136,6 @@ def get_rebalance_report():
         except:
             pass
 
-    # 若今天觸發了超越 ±5% 的真實再平衡建議，將其自動寫入本地紀錄檔案
     if any_trigger:
         history_data["total_count"] += 1
         history_data["total_cost"] += estimated_current_cost
@@ -166,7 +162,7 @@ def get_rebalance_report():
         f"⏰ 觀測時間 (台灣): {taiwan_time.strftime('%Y-%m-%d %H:%M')}\n"
         f"💵 即時美金匯率: {usd_to_twd:.2f} TWD\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"📈 各檔標的在庫比例體檢：\n"
+        f"📈 各檔標的在庫比例體檢 (目標調整為 40%/40%/20%)：\n"
         f"• 00713 元大台灣高息低波\n"
         f"  現況: {act_00713*100:.1f}% (目標 {target_00713*100:.0f}%) -> {status_00713}\n"
         f"  💡 {note_00713}\n\n"
