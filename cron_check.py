@@ -21,7 +21,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (升級美債利差 fast_info 即時價補救機制)
+# 🧠 第一大核心：總經加權風控塔台 (🛠️ 終極修復：美債利差 10日滾動遞補防禦)
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -58,12 +58,12 @@ def get_risk_control_report(df):
         print("PE 擷取失敗，啟動標普回推備援:", e)
         data['pe_ratio'] = None
 
-    # --- 3. 10Y-2Y 美債利差 (雙層精密即時報價防禦) ---
+    # --- 3. 10Y-2Y 美債利差 (🛠️ 10日滾動回溯安全過濾防護機制) ---
     try:
         t10_val, t02_val = None, None
         t10_series, t02_series = None, None
 
-        # 第一層：嘗試從全域打包大數據矩陣中提取歷史收盤
+        # 第一層：嘗試從全域大數據矩陣中提取
         if df is not None and 'Close' in df:
             if '^TNX' in df['Close'].columns and '^2Y' in df['Close'].columns:
                 t10_series = df['Close']['^TNX'].dropna()
@@ -72,17 +72,23 @@ def get_risk_control_report(df):
                     t10_val = float(t10_series.iloc[-1])
                     t02_val = float(t02_series.iloc[-1])
 
-        # 第二層核心補救：如果大數據歷史序列尚未生成 (清晨常見)，直接調用 fast_info 快照最新現價
+        # 第二層終極補救：若第一層為空或未就緒，獨立拉出 10 天歷史通道，全面洗淨 NaN 取最新已知有效收盤價
         if t10_val is None or t02_val is None:
-            print("💡 歷史 K 線未就緒，啟動美債即時特快通道補救...")
+            print("💡 啟動美債利差歷史滾動遞補補救線路...")
             t10_ticker = yf.Ticker("^TNX")
             t02_ticker = yf.Ticker("^2Y")
-            t10_val = t10_ticker.fast_info.get('last_price') or t10_ticker.info.get('regularMarketPrice')
-            t02_val = t02_ticker.fast_info.get('last_price') or t02_ticker.info.get('regularMarketPrice')
             
-            # 用於趨勢箭頭判定的歷史序列補抓
-            if t10_series is None or t10_series.empty: t10_series = t10_ticker.history(period="5d")['Close'].dropna()
-            if t02_series is None or t02_series.empty: t02_series = t02_ticker.history(period="5d")['Close'].dropna()
+            # 使用 10d 擴大範圍，確保洗掉時差產生的 NaN
+            t10_series = t10_ticker.history(period="10d")['Close'].dropna()
+            t02_series = t02_ticker.history(period="10d")['Close'].dropna()
+            
+            if not t10_series.empty and not t02_series.empty:
+                t10_val = float(t10_series.iloc[-1])
+                t02_val = float(t02_series.iloc[-1])
+            else:
+                # 最終備援嘗試即時快照
+                t10_val = t10_ticker.fast_info.get('last_price') or t10_ticker.info.get('regularMarketPrice')
+                t02_val = t02_ticker.fast_info.get('last_price') or t02_ticker.info.get('regularMarketPrice')
 
         if t10_val is not None and t02_val is not None:
             # 修正 yfinance 的 10 倍放大 BUG
@@ -100,7 +106,7 @@ def get_risk_control_report(df):
             spread_history_bps = (s10 - s02) * 100
             data['yield_arrow'] = get_trend_arrow(spread_history_bps)
         else:
-            raise Exception("雙層通道路由皆未取得有效美債殖利率")
+            raise Exception("多維路由皆未成功擷取到有效美債殖利率")
             
     except Exception as e:
         print("美債利差精算崩潰:", e)
@@ -337,7 +343,7 @@ def get_rebalance_report(df):
             print(f"批次矩陣提取 {ticker} 欄位異常，切換獨立通道: {ex}")
 
         try:
-            fallback_series = yf.Ticker(ticker).history(period="5d")['Close'].dropna()
+            fallback_series = yf.Ticker(ticker).history(period="10d")['Close'].dropna()
             if not fallback_series.empty:
                 return float(fallback_series.iloc[-1])
         except Exception as ex:
