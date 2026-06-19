@@ -20,7 +20,7 @@ def get_trend_arrow(series):
     return "➡️"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (🚀 升級：終極即時快照三層備援與 300bps 熔斷)
+# 🧠 第一大核心：總經加權風控塔台
 # =========================================================================
 def get_risk_control_report(df):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -66,7 +66,7 @@ def get_risk_control_report(df):
     except:
         data['pe_ratio'] = None
 
-    # --- 3. 10Y-2Y 美債利差 (🛠️ 依照終極即時快照優先策略重寫) ---
+    # --- 3. 10Y-2Y 美債利差 ---
     t10_val, t02_val = None, None
     t10_src, t02_src = "未取得", "未取得"
     
@@ -75,16 +75,13 @@ def get_risk_control_report(df):
 
     # 【10Y 抓取線路】
     try:
-        # 第一層：fast_info 快照
         t10_val = t10_tk.fast_info.get('last_price')
         if t10_val is not None: t10_src = "快照通道 (fast_info)"
         
-        # 第二層：info 快照
         if t10_val is None:
             t10_val = t10_tk.info.get('regularMarketPrice') or t10_tk.info.get('previousClose')
             if t10_val is not None: t10_src = "快照通道 (info)"
             
-        # 第三層：history 歷史線
         if t10_val is None:
             t10_hist = t10_tk.history(period="15d")['Close'].dropna()
             if not t10_hist.empty:
@@ -95,16 +92,13 @@ def get_risk_control_report(df):
 
     # 【2Y 抓取線路】
     try:
-        # 第一層：fast_info 快照
         t02_val = t02_tk.fast_info.get('last_price')
         if t02_val is not None: t02_src = "快照通道 (fast_info)"
         
-        # 第二層：info 快照
         if t02_val is None:
             t02_val = t02_tk.info.get('regularMarketPrice') or t02_tk.info.get('previousClose')
             if t02_val is not None: t02_src = "快照通道 (info)"
             
-        # 第三層：history 歷史線
         if t02_val is None:
             t02_hist = t02_tk.history(period="15d")['Close'].dropna()
             if not t02_hist.empty:
@@ -113,33 +107,37 @@ def get_risk_control_report(df):
     except Exception as ex:
         print(f"提取 2Y 美債數據時發生預期外阻斷: {ex}")
 
-    # 🛠️ 標註除錯 Log
     print(f"📊 [美債利差診斷儀] 10Y來源: {t10_src} | 原始值: {t10_val}")
     print(f"📊 [美債利差診斷儀] 2Y來源: {t02_src} | 原始值: {t02_val}")
 
     try:
         if t10_val is not None and t02_val is not None:
-            # 保留原本的「10倍放大BUG修正」邏輯
             if t10_val > 15: t10_val /= 10
             if t02_val > 15: t02_val /= 10
             
             calc_spread_bps = round((t10_val - t02_val) * 100, 1)
             
-            # 🛠️ 新增：合理性防呆檢查 (絕對值 > 300bps 視為異常熔斷)
             if abs(calc_spread_bps) > 300.0:
                 raise ValueError(f"利差數值離譜防呆觸發: {calc_spread_bps} bps (可能存在單位不對稱異常)")
                 
             data['yield_spread_bps'] = calc_spread_bps
             
-            # 趨勢箭頭仍由歷史區間輔助
-            t10_arrow_series = t10_tk.history(period="15d")['Close'].dropna()
-            t02_arrow_series = t02_tk.history(period="15d")['Close'].dropna()
-            if not t10_arrow_series.empty and not t02_arrow_series.empty:
-                min_len = min(len(t10_arrow_series), len(t02_arrow_series))
-                s10 = t10_arrow_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
-                s02 = t02_arrow_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
-                data['yield_arrow'] = get_trend_arrow(s10 - s02)
-            else:
+            try:
+                t10_arrow_series = t10_tk.history(period="15d")['Close'].dropna()
+                t02_arrow_series = t02_tk.history(period="15d")['Close'].dropna()
+                if not t10_arrow_series.empty and not t02_arrow_series.empty:
+                    min_len = min(len(t10_arrow_series), len(t02_arrow_series))
+                    s10 = t10_arrow_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
+                    s02 = t02_arrow_series.iloc[-min_len:].copy().apply(lambda x: x/10 if x > 15 else x)
+                    
+                    spread_series = s10 - s02
+                    if abs(spread_series.iloc[-1] - spread_series.iloc[-2]) > 3.0: 
+                        data['yield_arrow'] = "➡️"
+                    else:
+                        data['yield_arrow'] = get_trend_arrow(spread_series)
+                else:
+                    data['yield_arrow'] = "➡️"
+            except:
                 data['yield_arrow'] = "➡️"
         else:
             raise Exception("未通過快照與歷史線完整路由")
@@ -147,7 +145,7 @@ def get_risk_control_report(df):
         print(f"🚨 [美債利差核心報警] 計算中止。原因: {e}")
         data['yield_spread_bps'], data['yield_arrow'] = None, "⏳"
 
-    # --- 4. 高收益債變化率 (HYG 近30日變化) ---
+    # --- 4. 高收益債變化率 ---
     try:
         if df is not None and 'Close' in df and 'HYG' in df['Close'].columns:
             hyg_series = df['Close']['HYG'].dropna()
@@ -205,6 +203,7 @@ def get_risk_control_report(df):
             print(f"席勒CAPE 1號抓取攔截: {e}")
             data['shiller_cape'] = None
 
+        # 🛠️ 依要求修正：相對基準點校正法 (防範公式暴衝大盤誤判)
         try:
             if df is not None and 'Close' in df and '^W5000' in df['Close'].columns:
                 w5000_series = df['Close']['^W5000'].dropna()
@@ -212,8 +211,10 @@ def get_risk_control_report(df):
                 w5000_series = yf.Ticker("^W5000").history(period="10d")['Close'].dropna()
             if not w5000_series.empty:
                 current_w5000_val = w5000_series.iloc[-1]
-                estimated_gdp = 28500.0
-                data['buffett_indicator'] = round((current_w5000_val * 2.2 / estimated_gdp) * 100, 1)
+                # 精準校正基準配置
+                baseline_w5000 = 75000.0
+                baseline_buffett_pct = 225.0
+                data['buffett_indicator'] = round(baseline_buffett_pct * (current_w5000_val / baseline_w5000), 1)
             else:
                 data['buffett_indicator'] = None
         except:
@@ -243,7 +244,6 @@ def get_risk_control_report(df):
         yield_l = "🔴" if data['yield_spread_bps'] < -50 else ("🟡" if data['yield_spread_bps'] < 0 else "🟢")
         total_score += 2 if data['yield_spread_bps'] < -50 else (1 if data['yield_spread_bps'] < 0 else 0)
     else:
-        # 🛠️ 配合關鍵要求 5：若其他正常但美債仍是 None (延遲)，在 LINE 報告尾端主動增列本地明細
         yield_txt = f"延遲 ⏳ (10Y:{t10_src} | 2Y:{t02_src})"
         yield_l = "⚪"
 
@@ -310,7 +310,7 @@ def get_risk_control_report(df):
         with open(risk_file, "w", encoding="utf-8") as f: json.dump(risk_history, f, ensure_ascii=False, indent=4)
     except: pass
 
-    # 排版輸出
+    # 排版輸出 (🛠️ 處：多餘的 } 右大括號已完全修正移除)
     report = (
         f"🚨 【unclelee 總經加權風控塔台】\n"
         f"⏰ {taiwan_time.strftime('%m-%d %H:%M')} | 📉 軌跡: {yesterday_score_text}\n"
@@ -361,8 +361,6 @@ def get_rebalance_report(df):
     else: shares_00713, shares_voo, shares_smh = 10153, 28, 15
 
     target_00713, target_voo, target_smh = 0.40, 0.40, 0.20
-    
-    # 🛠️ 修正：新增定義除息日防呆開關，避免 NameError 阻斷執行
     is_ex_dividend_day = False 
 
     def safe_get_price_v3(close_df, ticker):
