@@ -1,31 +1,41 @@
-name: Daily Portfolio Rebalance Check
+name: Market Risk & Rebalance Check
 
 on:
   schedule:
-    # 這是國際標準時間 (UTC) 10:00，換算台灣時間就是每天下午 18:00 自動執行
-    - cron: '0 10 * * *'
-  workflow_dispatch: # 允許我們在網頁上手動點擊按鈕測試
+    # 每天台灣時間早上 7:30 自動執行 (UTC 23:30)
+    - cron: '30 23 * * *'
+  workflow_dispatch: # 保留手動點火測試按鈕
 
 jobs:
-  check-portfolio:
+  check:
     runs-on: ubuntu-latest
 
     steps:
-    - name: 複製儲存庫代碼
+    - name: Checkout repository
       uses: actions/checkout@v3
 
-    - name: 設定 Python 環境
+    - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
 
-    - name: 安裝必要套件
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install requests yfinance
+        pip install yfinance pandas numpy requests beautifulsoup4 lxml
 
-    - name: 執行自動再平衡檢查並發送通知
+    - name: Run Check Script
       env:
         LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
-        LINE_USER_ID: "${{ secrets.LINE_USER_ID }}"
+        LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
       run: python cron_check.py
+
+    - name: Commit and Push Updated Data
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        # 🚀 同時追蹤軌跡檔與歷史百分位大腦檔
+        git add risk_history.json historical_baseline.json
+        # 有變動才提交，防範無變動時 Actions 報錯中斷
+        git diff --quiet && git diff --staged --quiet || git commit -m "自動同步風控軌跡與歷史百分位基準庫 [skip ci]"
+        git push
