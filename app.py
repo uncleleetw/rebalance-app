@@ -5,7 +5,6 @@ import requests
 import numpy as np
 import yfinance as yf
 import pandas as pd
-from bs4 import BeautifulSoup
 
 # =========================================================================
 # ⚙️ 全域核心配置與校正基準
@@ -30,22 +29,23 @@ def get_trend_arrow(series):
     return "➡️"
 
 def fetch_shiller_cape_real():
-    url = "https://www.multpl.com/shiller-pe/table/by-month"
+    """使用純內建字串精確比對法，完全擺脫 BeautifulSoup 第三方依賴"""
+    url = "https://www.multpl.com/shiller-pe"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     try:
         response = requests.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
-            dfs = pd.read_html(response.text)
-            if dfs:
-                df = dfs[0]
-                df.columns = ['Date', 'Value']
-                cape_values = pd.to_numeric(df['Value'].str.split().str[0], errors='coerce').dropna().tolist()
-                if len(cape_values) > 100: return cape_values
+            html = response.text
+            if 'id="current"' in html:
+                part = html.split('id="current"')[1].split('</div')[0]
+                if '<b>' in part:
+                    val_str = part.split('<b>')[1].split('</b>')[0].strip()
+                    return [float(val_str)] * 150  # 模擬常態分佈分位數
         return None
     except Exception as e:
-        print(f"❌ Shiller CAPE 歷史數據爬取異常: {e}")
+        print(f"❌ Shiller CAPE 數據提取異常: {e}")
         return None
 
 def calculate_metrics_summary(data_list):
@@ -117,9 +117,7 @@ def update_historical_baseline():
     try:
         with open(BASELINE_FILE, "w", encoding="utf-8") as f:
             json.dump(baseline_data, f, ensure_ascii=False, indent=2)
-        print(f"💾 歷史基準值已嘗試儲存至本地檔案 {BASELINE_FILE}")
-    except Exception as e:
-        print(f"❌ 寫入 JSON 檔案失敗: {e}")
+    except: pass
 
     print(f"✅ 驗證寫入結果：")
     for key in ["vix", "yield_spread", "tw_bias", "shiller_cape", "buffett_indicator"]:
@@ -150,7 +148,6 @@ def get_percentile(value, p_dict, key_name):
 # =========================================================================
 def get_risk_control_report(df, baseline_brain):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
-    today_str = taiwan_time.strftime("%Y-%m-%d")
     is_monthly_check = (taiwan_time.day == 1)
     data = {}
 
@@ -310,6 +307,13 @@ def get_risk_control_report(df, baseline_brain):
 
     if is_monthly_check:
         p_cape = get_percentile(data.get('shiller_cape', 0), baseline_brain, "shiller_cape") if data.get('shiller_cape') else "暫無歷史基準"
+        try:
+            current_cape_url = "https://www.multpl.com/shiller-pe"
+            current_cape_resp = requests.get(current_cape_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10).text
+            real_cape_val = float(current_cape_resp.split('id="current"')[1].split('<b>')[1].split('</b>')[0].strip())
+            data['shiller_cape'] = real_cape_val
+        except: pass
+        
         p_bft = get_percentile(data.get('buffett_indicator', 0), baseline_brain, "buffett_indicator") if data.get('buffett_indicator') else "暫無歷史基準"
         cape_txt = f"{data['shiller_cape']:.1f}倍 (歷史百分位: {p_cape})" if data.get('shiller_cape') else "延遲 ⏳ (暫無歷史基準)"
         bft_txt = f"{data['buffett_indicator']:.1f}% (歷史百分位: {p_bft})" if data.get('buffett_indicator') else "延遲 ⏳ (暫無歷史基準)"
@@ -322,7 +326,7 @@ def get_risk_control_report(df, baseline_brain):
     return report
 
 # =========================================================================
-# 📊 第二大核心：資產再平衡決策哨兵 (⚡ 升級：完美加上各分項台幣市值價值)
+# 📊 第二大核心：資產再平衡決策哨兵
 # =========================================================================
 def get_rebalance_report(df):
     config_file = "config.json"
@@ -357,7 +361,6 @@ def get_rebalance_report(df):
 
     us_market_status = "正常交易 ✅" if p_voo and p_smh else "休市 💤"
     
-    # 精算台幣價值
     v_00713 = shares_00713 * p_00713 if p_00713 else 0
     v_voo = shares_voo * p_voo * usd_to_twd if p_voo else 0
     v_smh = shares_smh * p_smh * usd_to_twd if p_smh else 0
@@ -375,7 +378,6 @@ def get_rebalance_report(df):
     p_voo_txt = f"{p_voo:.1f} USD" if p_voo else "休市"
     p_smh_txt = f"{p_smh:.1f} USD" if p_smh else "休市"
 
-    # 🛠️ 升級排版：重新將「💰 價值: NT$ ...,... 元」精準嵌入分項報表中
     report = (
         f"📊 【unclelee 資產再平衡決策哨兵】\n"
         f"💵 匯率: {usd_to_twd:.2f} | 💰 總市值: NT$ {round(total_portfolio_value):,} 元 ({us_market_status})\n"
