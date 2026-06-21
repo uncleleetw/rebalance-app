@@ -27,13 +27,8 @@ def get_trend_arrow(series):
     elif current < prev: return "🔻"
     return "➡️"
 
-def fetch_shiller_cape_fallback():
-    """當 multpl.com 爬取失敗時的優雅降級歷史估計值 (確保系統絕不崩潰)"""
-    print("⚠️ 啟動 Shiller CAPE 歷史估計值備援大腦...")
-    return np.random.normal(loc=26.5, scale=6.0, size=1000).tolist()
-
 def fetch_shiller_cape_real():
-    """嘗試爬取 multpl.com 的歷史月度 CAPE 數據"""
+    """嘗試爬取 multpl.com 的歷史月度 CAPE 數據，若失敗則回傳 None"""
     url = "https://www.multpl.com/shiller-pe/table/by-month"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -48,17 +43,19 @@ def fetch_shiller_cape_real():
                 cape_values = pd.to_numeric(df['Value'].str.split().str[0], errors='coerce').dropna().tolist()
                 if len(cape_values) > 100:
                     return cape_values
-        return fetch_shiller_cape_fallback()
+        return None
     except Exception as e:
-        print(f"❌ Shiller CAPE 爬取異常: {e}")
-        return fetch_shiller_cape_fallback()
+        print(f"❌ Shiller CAPE 歷史數據爬取異常: {e}")
+        return None
 
 def calculate_metrics_summary(data_list):
     """計算結構要求的 min, median, max 與 100階百分位"""
+    if not data_list:
+        return None
     arr = np.array(data_list)
     arr = arr[~np.isnan(arr)]
     if len(arr) == 0:
-        return {"min": 0, "median": 0, "max": 0, "percentiles": [0]*100}
+        return None
     p_tiles = [float(np.percentile(arr, i)) for i in range(1, 101)]
     return {
         "min": float(np.min(arr)),
@@ -68,7 +65,7 @@ def calculate_metrics_summary(data_list):
     }
 
 def update_historical_baseline():
-    """核心大腦功能：每逢 1 號背景自動重刷 15 年歷史百分位大數據"""
+    """核心大腦功能：每逢 1 號背景自動重刷 15 年歷史百分位大數據 (🛠️ 已對齊 FRED 與安全機制)"""
     print("🔄 [歷史基準大腦] 正在背景建構/更新五大指標 15 年歷史百分位數據庫...")
     baseline_data = {}
 
@@ -80,18 +77,24 @@ def update_historical_baseline():
     except Exception as e:
         print(f"❌ VIX 歷史抓取失敗: {e}")
 
-    # 2. 10Y-2Y 美債利差 (透過 15 年歷史 K 線解算)
+    # 2. 10Y-2Y 美債利差 (🛠️ 修正：優先且無條件改用 FRED 權威歷史 CSV 進行高精度日期對齊)
     try:
-        dgs10 = yf.download("^TNX", period="15y", progress=False).get('Close')
-        # 備援降級對齊解算
-        dgs2 = yf.download("2YY=F", period="15y", progress=False).get('Close')
-        if dgs10 is not None and dgs2 is not None:
-            s10 = dgs10.copy().apply(lambda x: x/10 if x > 15 else x)
-            s02 = dgs2.copy().apply(lambda x: x/10 if x > 15 else x)
-            spread = ((s10 - s02) * 100).dropna().tolist()
-            baseline_data["yield_spread"] = calculate_metrics_summary(spread)
+        url_10y = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10"
+        url_2y = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2"
+        
+        df_10y = pd.read_csv(url_10y, na_values=".")
+        df_2y = pd.read_csv(url_2y, na_values=".")
+        
+        df_fred = pd.merge(df_10y, df_2y, on="DATE").dropna()
+        df_fred['DGS10'] = pd.to_numeric(df_fred['DGS10'])
+        df_fred['DGS2'] = pd.to_numeric(df_fred['DGS2'])
+        
+        # 轉成 bps 單位基準
+        fred_spread_bps = ((df_fred['DGS10'] - df_fred['DGS2']) * 100).tolist()
+        baseline_data["yield_spread"] = calculate_metrics_summary(fred_spread_bps)
     except Exception as e:
-        print(f"❌ 美債利差歷史計算失敗: {e}")
+        print(f"❌ FRED 美債利差歷史計算失敗，進入降級隔離線: {e}")
+        baseline_data["yield_spread"] = None
 
     # 3. 台股 20 日乖離率 (^TWII 15y)
     try:
@@ -104,9 +107,9 @@ def update_historical_baseline():
     except Exception as e:
         print(f"❌ 台股乖離率歷史計算失敗: {e}")
 
-    # 4. 席勒 CAPE 比率
+    # 4. 席勒 CAPE 比率 (🛠️ 修正：爬蟲失敗直接記為 None 絕不捏造)
     cape_data = fetch_shiller_cape_real()
-    baseline_data["shiller_cape"] = calculate_metrics_summary(cape_data)
+    baseline_data["shiller_cape"] = calculate_metrics_summary(cape_data) if cape_data else None
 
     # 5. 巴菲特指標 (W5000 歷史 15 年校正公式回推)
     try:
@@ -125,17 +128,19 @@ def update_historical_baseline():
     return baseline_data
 
 def get_percentile(value, p_dict, key_name):
-    """安全查表函式：精確獲取數值在歷史 100 階百分位中的分位數(1%-100%)"""
-    if not p_dict or key_name not in p_dict: return "暫無"
+    """安全查表函式：精確獲取百分位，若缺乏基準數據則回傳暫無歷史基準 (🛠️ 修正問題1)"""
+    if not p_dict or key_name not in p_dict or p_dict[key_name] is None: 
+        return "暫無歷史基準"
     p_list = p_dict[key_name].get("percentiles", [])
-    if not p_list: return "暫無"
+    if not p_list: 
+        return "暫無歷史基準"
     for i, p_val in enumerate(p_list):
         if value <= p_val:
             return f"{i + 1}%"
     return "100%"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (⚡ 升級：完美融合 5 大指標歷史百分位)
+# 🧠 第一大核心：總經加權風控塔台
 # =========================================================================
 def get_risk_control_report(df, baseline_brain):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -143,7 +148,6 @@ def get_risk_control_report(df, baseline_brain):
     is_monthly_check = (taiwan_time.day == 1)
     data = {}
     
-    # 讀取手動配置
     config_data = {}
     config_file = "config.json"
     if os.path.exists(config_file):
@@ -203,7 +207,6 @@ def get_risk_control_report(df, baseline_brain):
     t10_val, t10_src = get_treasury_yield_from_fred("DGS10")
     t02_val, t02_src = get_treasury_yield_from_fred("DGS2")
 
-    # Yahoo 降級隔離備援
     if t10_val is None:
         try:
             t10_tk = yf.Ticker("^TNX")
@@ -232,7 +235,7 @@ def get_risk_control_report(df, baseline_brain):
     except:
         data['yield_spread_bps'], data['yield_arrow'] = None, "⏳"
 
-    # --- 4. 高收益債變化率 (排除不計百分位) ---
+    # --- 4. 高收益債變化率 ---
     try:
         if close_df is not None and hasattr(close_df, 'columns') and 'HYG' in close_df.columns:
             hyg_series = close_df['HYG'].dropna()
@@ -242,7 +245,7 @@ def get_risk_control_report(df, baseline_brain):
         data['hy_arrow'] = get_trend_arrow(hyg_series)
     except: data['hy_oas'], data['hy_arrow'] = None, "⏳"
 
-    # --- 5. 台幣兌美元匯率 (排除不計百分位) ---
+    # --- 5. 台幣兌美元匯率 ---
     try:
         if close_df is not None and hasattr(close_df, 'columns') and 'TWD=X' in close_df.columns:
             twd_series = close_df['TWD=X'].dropna()
@@ -268,7 +271,7 @@ def get_risk_control_report(df, baseline_brain):
     except: data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
 
     # =========================================================================
-    # 📅 月度核心指標數據抓取 (僅限每月 1 號解鎖計算與發送)
+    # 📅 月度核心指標數據抓取 (僅限每月 1 號)
     # =========================================================================
     if is_monthly_check:
         try:
@@ -293,7 +296,7 @@ def get_risk_control_report(df, baseline_brain):
     # =========================================================================
     total_score = 0
     p_vix = get_percentile(data.get('vix', 0), baseline_brain, "vix") if data.get('vix') else "暫無"
-    p_spd = get_percentile(data.get('yield_spread_bps', 0), baseline_brain, "yield_spread") if data.get('yield_spread_bps') else "暫慢"
+    p_spd = get_percentile(data.get('yield_spread_bps', 0), baseline_brain, "yield_spread") if data.get('yield_spread_bps') else "暫無"
     p_bias = get_percentile(data.get('tw_bias', 0), baseline_brain, "tw_bias") if data.get('tw_bias') else "暫無"
 
     if data.get('vix') is not None:
@@ -332,23 +335,10 @@ def get_risk_control_report(df, baseline_brain):
         total_score += 2 if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else (1 if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else 0)
     else: tw_txt, tw_l = "延遲 ⏳", "⚪"
 
-    if is_monthly_check:
-        if data.get('shiller_cape') is not None:
-            total_score += 0 if data['shiller_cape'] < 25 else (1 if data['shiller_cape'] < 32 else (2 if data['shiller_cape'] < 40 else 3))
-        if data.get('buffett_indicator') is not None:
-            total_score += 0 if data['buffett_indicator'] < 100 else (1 if data['buffett_indicator'] < 150 else (2 if data['buffett_indicator'] < 200 else 3))
-        if data.get('recession_prob') is not None:
-            total_score += 0 if data['recession_prob'] < 15 else (1 if data['recession_prob'] < 30 else (2 if data['recession_prob'] < 50 else 3))
-
-        if total_score >= 15: status_light = "🔴 【四級極端風暴】請啟動質押分批解鎖退場/拉高維持率"
-        elif total_score >= 10: status_light = "🟠 【三級高風險】減碼/停止槓桿加碼"
-        elif total_score >= 5: status_light = "🟡 【二級市場觀望】暫緩追高"
-        else: status_light = "🟢 【一級安全綠燈】紀律加碼/維持常態"
-    else:
-        if total_score >= 9: status_light = "🔴 【四級極端風暴】請啟動質押分批解鎖退場/拉高維持率"
-        elif total_score >= 6: status_light = "🟠 【三級高風險】減碼/停止槓桿加碼"
-        elif total_score >= 3: status_light = "🟡 【二級市場觀望】暫緩追高"
-        else: status_light = "🟢 【一級安全綠燈】紀律加碼/維持常態"
+    if total_score >= 9: status_light = "🔴 【四級極端風暴】請啟動質押分批解鎖退場/拉高維持率"
+    elif total_score >= 6: status_light = "🟠 【三級高風險】減碼/停止槓桿加碼"
+    elif total_score >= 3: status_light = "🟡 【二級市場觀望】暫緩追高"
+    else: status_light = "🟢 【一級安全綠燈】紀律加碼/維持常態"
 
     # 歷史去重軌跡計算
     risk_file = "risk_history.json"
@@ -378,11 +368,11 @@ def get_risk_control_report(df, baseline_brain):
     )
 
     if is_monthly_check:
-        p_cape = get_percentile(data.get('shiller_cape', 0), baseline_brain, "shiller_cape") if data.get('shiller_cape') else "暫無"
-        p_bft = get_percentile(data.get('buffett_indicator', 0), baseline_brain, "buffett_indicator") if data.get('buffett_indicator') else "暫無"
+        p_cape = get_percentile(data.get('shiller_cape', 0), baseline_brain, "shiller_cape") if data.get('shiller_cape') else "暫無歷史基準"
+        p_bft = get_percentile(data.get('buffett_indicator', 0), baseline_brain, "buffett_indicator") if data.get('buffett_indicator') else "暫無歷史基準"
         
-        cape_txt = f"{data['shiller_cape']:.1f}倍 (歷史百分位: {p_cape})" if data.get('shiller_cape') else "延遲 ⏳"
-        bft_txt = f"{data['buffett_indicator']:.1f}% (歷史百分位: {p_bft})" if data.get('buffett_indicator') else "延遲 ⏳"
+        cape_txt = f"{data['shiller_cape']:.1f}倍 (歷史百分位: {p_cape})" if data.get('shiller_cape') else "延遲 ⏳ (暫無歷史基準)"
+        bft_txt = f"{data['buffett_indicator']:.1f}% (歷史百分位: {p_bft})" if data.get('buffett_indicator') else "延遲 ⏳ (暫無歷史基準)"
         rec_txt = f"{data['recession_prob']:.1f}%" if data.get('recession_prob') is not None else "未設定 ⏳"
 
         report += (
@@ -410,6 +400,8 @@ def get_rebalance_report(df):
         except: pass
 
     target_00713, target_voo, target_smh = 0.40, 0.40, 0.20
+    is_ex_dividend_day = False 
+
     close_df = df.get('Close') if df is not None and hasattr(df, 'get') else None
 
     def safe_get_price_v3(close_df, ticker):
@@ -424,14 +416,17 @@ def get_rebalance_report(df):
         except: pass
         return None
 
+    # 🚀 優化效果：主成交現價均能直接從 shared_df 記憶體批量提取，拒絕限流
     p_voo = safe_get_price_v3(close_df, 'VOO')
     p_smh = safe_get_price_v3(close_df, 'SMH')
     usd_to_twd = safe_get_price_v3(close_df, 'TWD=X') or 32.5
 
-    t_00713 = yf.Ticker("00713.TW")
-    p_00713 = t_00713.fast_info.get('last_price') or t_00713.info.get('regularMarketPrice')
+    # 00713 因加載字尾可能與大盤 MultiIndex 相斥，若記憶體未命中則降級處理
+    p_00713 = safe_get_price_v3(close_df, '00713.TW')
     if p_00713 is None:
-        try: p_00713 = float(t_00713.history(period="10d")['Close'].dropna().iloc[-1])
+        try:
+            t_00713 = yf.Ticker("00713.TW")
+            p_00713 = t_00713.fast_info.get('last_price') or t_00713.info.get('regularMarketPrice')
         except: p_00713 = None
 
     us_market_status = "正常交易 ✅" if p_voo and p_smh else "休市 💤"
@@ -492,28 +487,28 @@ def send_line_message(message_text):
     except: pass
 
 # =========================================================================
-# 🚀 核心控制台 (自動化整合一鍵點火)
+# 🚀 核心控制台
 # =========================================================================
 def main():
     today = datetime.datetime.now()
     is_monthly_check = (today.day == 1)
 
-    # 🛠️ 歷史基準大腦載入與自動維護排程
+    # 歷史基準大腦載入與自動維護
     baseline_brain = {}
     if not os.path.exists(BASELINE_FILE) or is_monthly_check:
         try:
             baseline_brain = update_historical_baseline()
         except Exception as e:
-            print(f"🚨 大數據計算遇到網路波動，自動載入現有大腦存檔: {e}")
+            print(f"🚨 大數據更新受波動影響，自動載入現有大腦備份: {e}")
             if os.path.exists(BASELINE_FILE):
                 with open(BASELINE_FILE, "r", encoding="utf-8") as f: baseline_brain = json.load(f)
     else:
         with open(BASELINE_FILE, "r", encoding="utf-8") as f: baseline_brain = json.load(f)
 
-    # 每日標的數據批量下載
+    # 每日數據批量下載 (🛠️ 修正問題3：補齊資產 Tickers，全面阻斷重複請求)
     shared_df = None
     try:
-        tickers = ["^VIX", "SPY", "^GSPC", "HYG", "TWD=X", "^TWII"]
+        tickers = ["^VIX", "SPY", "^GSPC", "HYG", "TWD=X", "^TWII", "00713.TW", "VOO", "SMH"]
         if is_monthly_check: tickers.append("^W5000")
         shared_df = yf.download(tickers, period="50d", progress=False)
         if shared_df is None or shared_df.empty or 'Close' not in shared_df: shared_df = None
