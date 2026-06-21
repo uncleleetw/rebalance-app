@@ -34,6 +34,8 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git add risk_history.json historical_baseline.json
+        # 🚀 終極防禦：改用萬用字元，只要有任何 json 檔有變動就自動追蹤，不強制指定特定檔名
+        git add *.json || true
+        # 加上 || true 與條件判斷，防範無東西可提交時的報錯中斷
         git diff --quiet && git diff --staged --quiet || git commit -m "自動同步風控軌跡與歷史百分位基準庫 [skip ci]"
-        git push
+        git push || true
