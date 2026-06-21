@@ -14,6 +14,10 @@ BASELINE_W5000 = 75000.0
 BASELINE_BUFFETT_PCT = 225.0
 BASELINE_FILE = "historical_baseline.json"
 
+DEFAULT_VIX_P = [9.8, 10.5, 11.1, 11.4, 11.8, 12.1, 12.3, 12.5, 12.7, 12.9, 13.1, 13.3, 13.4, 13.6, 13.7, 13.9, 14.0, 14.2, 14.3, 14.5, 14.6, 14.7, 14.9, 15.0, 15.1, 15.3, 15.4, 15.5, 15.7, 15.8, 15.9, 16.1, 16.2, 16.4, 16.5, 16.7, 16.8, 17.0, 17.1, 17.3, 17.4, 17.6, 17.7, 17.9, 18.1, 18.2, 18.4, 18.6, 18.8, 19.0, 19.2, 19.4, 19.6, 19.8, 20.0, 20.3, 20.5, 20.8, 21.1, 21.3, 21.6, 21.9, 22.2, 22.6, 22.9, 23.3, 23.7, 24.1, 24.6, 25.1, 25.6, 26.1, 26.6, 27.2, 27.8, 28.5, 29.2, 30.0, 31.0, 31.9, 32.9, 34.0, 35.3, 36.8, 38.2, 39.8, 41.5, 43.1, 45.0, 47.1, 49.9, 53.0, 56.4, 60.1, 64.3, 69.1, 73.6, 78.4, 82.6, 85.0]
+DEFAULT_SPREAD_P = [-90.0, -82.0, -75.0, -70.0, -65.0, -61.0, -58.0, -54.0, -51.0, -48.0, -45.0, -42.0, -39.0, -37.0, -34.0, -32.0, -29.0, -27.0, -24.0, -22.0, -19.0, -17.0, -15.0, -12.0, -10.0, -8.0, -5.0, -3.0, -1.0, 1.0, 4.0, 6.0, 9.0, 11.0, 14.0, 16.0, 19.0, 22.0, 24.0, 27.0, 30.0, 33.0, 35.0, 38.0, 41.0, 44.0, 47.0, 50.0, 53.0, 56.0, 59.0, 62.0, 65.0, 68.0, 71.0, 74.0, 78.0, 81.0, 84.0, 87.0, 91.0, 94.0, 98.0, 102.0, 105.0, 110.0, 114.0, 118.0, 122.0, 126.0, 131.0, 136.0, 140.0, 145.0, 150.0, 155.0, 161.0, 166.0, 172.0, 178.0, 184.0, 191.0, 198.0, 206.0, 214.0, 222.0, 230.0, 240.0, 249.0, 258.0, 267.0, 276.0, 285.0, 294.0, 303.0, 312.0, 321.0, 330.0, 340.0, 350.0]
+DEFAULT_BIAS_P = [-9.5, -8.2, -7.1, -6.3, -5.7, -5.2, -4.8, -4.4, -4.1, -3.8, -3.5, -3.3, -3.1, -2.9, -2.7, -2.5, -2.3, -2.1, -2.0, -1.8, -1.7, -1.6, -1.4, -1.3, -1.2, -1.1, -1.0, -0.9, -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.9, 3.0, 3.1, 3.2, 3.3, 3.5, 3.6, 3.7, 3.9, 4.0, 4.2, 4.3, 4.5, 4.6, 4.8, 5.0, 5.2, 5.4, 5.6, 5.8, 6.0, 6.2, 6.5, 6.7, 7.0, 7.3, 7.7, 8.1, 8.5, 9.0, 9.5, 10.2, 11.0, 11.9, 13.1, 14.5]
+
 # =========================================================================
 # 🛠️ 共通工具函式與大腦核心
 # =========================================================================
@@ -58,7 +62,6 @@ def calculate_metrics_summary(data_list):
     }
 
 def update_historical_baseline():
-    # 📌 【問題3 驗證點】：Actions 執行時必須在 Logs 中看到這行
     print("🔄 [歷史基準大腦] 正在背景建構/更新五大指標 15 年歷史百分位數據庫...")
     baseline_data = {}
 
@@ -111,7 +114,6 @@ def update_historical_baseline():
 
     baseline_data["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d")
 
-    # 💾 寫入 JSON 前實施本地磁碟寫入
     try:
         with open(BASELINE_FILE, "w", encoding="utf-8") as f:
             json.dump(baseline_data, f, ensure_ascii=False, indent=2)
@@ -119,7 +121,6 @@ def update_historical_baseline():
     except Exception as e:
         print(f"❌ 寫入 JSON 檔案失敗: {e}")
 
-    # 📌 【問題1 驗證點】：明確的主動印出驗證機制
     print(f"✅ 驗證寫入結果：")
     for key in ["vix", "yield_spread", "tw_bias", "shiller_cape", "buffett_indicator"]:
         if key in baseline_data and baseline_data[key] is not None:
@@ -130,17 +131,22 @@ def update_historical_baseline():
     return baseline_data
 
 def get_percentile(value, p_dict, key_name):
-    if not p_dict or key_name not in p_dict or p_dict[key_name] is None: 
-        return "暫無歷史基準"
-    p_list = p_dict[key_name].get("percentiles", [])
-    if not p_list: 
-        return "暫無歷史基準"
+    p_list = []
+    if p_dict and key_name in p_dict and p_dict[key_name] is not None:
+        p_list = p_dict[key_name].get("percentiles", [])
+        
+    if not p_list:
+        if key_name == "vix": p_list = DEFAULT_VIX_P
+        elif key_name == "yield_spread": p_list = DEFAULT_SPREAD_P
+        elif key_name == "tw_bias": p_list = DEFAULT_BIAS_P
+        else: return "暫無歷史基準"
+
     for i, p_val in enumerate(p_list):
         if value <= p_val: return f"{i + 1}%"
     return "100%"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (計算與排版)
+# 🧠 第一大核心：總經加權風控塔台
 # =========================================================================
 def get_risk_control_report(df, baseline_brain):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -203,7 +209,7 @@ def get_risk_control_report(df, baseline_brain):
         if t10_val is not None and t02_val is not None:
             data['yield_spread_bps'] = round((t10_val - t02_val) * 100, 1)
             data['yield_arrow'] = "➡️"
-        else: raise Exception("美債資料流中斷")
+        else: raise Exception("斷訊")
     except: data['yield_spread_bps'], data['yield_arrow'] = None, "⏳"
 
     # --- 4. 高收益債變化率 ---
@@ -241,7 +247,7 @@ def get_risk_control_report(df, baseline_brain):
         data['tw_bias_arrow'] = get_trend_arrow(twii_series)
     except: data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
 
-    # 🚦 歷史百分位對齊與計分
+    # 🚦 歷史百分位對齊
     total_score = 0
     p_vix = get_percentile(data.get('vix', 0), baseline_brain, "vix") if data.get('vix') else "暫無"
     p_spd = get_percentile(data.get('yield_spread_bps', 0), baseline_brain, "yield_spread") if data.get('yield_spread_bps') else "暫無"
@@ -315,8 +321,21 @@ def get_risk_control_report(df, baseline_brain):
         )
     return report
 
+# =========================================================================
+# 📊 第二大核心：資產再平衡決策哨兵 (⚡ 升級：完美加上各分項台幣市值價值)
+# =========================================================================
 def get_rebalance_report(df):
+    config_file = "config.json"
     shares_00713, shares_voo, shares_smh = 10153, 28, 15
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cd = json.load(f)
+                shares_00713 = cd.get("shares_00713", 10153)
+                shares_voo = cd.get("shares_voo", 28)
+                shares_smh = cd.get("shares_smh", 15)
+        except: pass
+
     target_00713, target_voo, target_smh = 0.40, 0.40, 0.20
     close_df = df.get('Close') if df is not None and hasattr(df, 'get') else None
 
@@ -337,6 +356,8 @@ def get_rebalance_report(df):
         except: p_00713 = None
 
     us_market_status = "正常交易 ✅" if p_voo and p_smh else "休市 💤"
+    
+    # 精算台幣價值
     v_00713 = shares_00713 * p_00713 if p_00713 else 0
     v_voo = shares_voo * p_voo * usd_to_twd if p_voo else 0
     v_smh = shares_smh * p_smh * usd_to_twd if p_smh else 0
@@ -350,23 +371,32 @@ def get_rebalance_report(df):
     dev_voo = (act_voo - target_voo) * 100
     dev_smh = (act_smh - target_smh) * 100
 
+    p_00713_txt = f"{p_00713:.1f} TWD" if p_00713 else "延遲"
+    p_voo_txt = f"{p_voo:.1f} USD" if p_voo else "休市"
+    p_smh_txt = f"{p_smh:.1f} USD" if p_smh else "休市"
+
+    # 🛠️ 升級排版：重新將「💰 價值: NT$ ...,... 元」精準嵌入分項報表中
     report = (
         f"📊 【unclelee 資產再平衡決策哨兵】\n"
         f"💵 匯率: {usd_to_twd:.2f} | 💰 總市值: NT$ {round(total_portfolio_value):,} 元 ({us_market_status})\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         f"🔍 【核心配置分項指標體檢】\n"
-        f"• 00713 ({shares_00713:,}股) | 比率: {act_00713*100:.1f}% | 偏離: {dev_00713:+.1f}%\n"
-        f"• VOO   ({shares_voo:,}股) | 比率: {act_voo*100:.1f}% | 偏離: {dev_voo:+.1f}%\n"
-        f"• SMH   ({shares_smh:,}股) | 比率: {act_smh*100:.1f}% | 偏離: {dev_smh:+.1f}%\n"
+        f"• 00713 ({shares_00713:,}股 × {p_00713_txt})\n"
+        f"  💰 價值: NT$ {round(v_00713):,} 元 | 比率: {act_00713*100:.1f}% (目標 40%) | 偏離: {dev_00713:+.1f}%\n"
+        f"• VOO   ({shares_voo:,}股 × {p_voo_txt})\n"
+        f"  💰 價值: NT$ {round(v_voo):,} 元 | 比率: {act_voo*100:.1f}% (目標 40%) | 偏離: {dev_voo:+.1f}%\n"
+        f"• SMH   ({shares_smh:,}股 × {p_smh_txt})\n"
+        f"  💰 價值: NT$ {round(v_smh):,} 元 | 比率: {act_smh*100:.1f}% (目標 20%) | 偏離: {dev_smh:+.1f}%\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
     )
+    
     if p_voo and p_smh and p_00713:
         if abs(dev_00713) > 5.0 or abs(dev_voo) > 5.0 or abs(dev_smh) > 5.0:
             t_shares_00713 = round((total_portfolio_value * target_00713 - v_00713) / p_00713)
             t_shares_voo = round((total_portfolio_value * target_voo - v_voo) / (p_voo * usd_to_twd))
             t_shares_smh = round((total_portfolio_value * target_smh - v_smh) / (p_smh * usd_to_twd))
             report += (
-                f"🎯 交易建議：\n"
+                f"🎯 偏離過大，建議交易建議：\n"
                 f"1. 00713: {'補進 +' if t_shares_00713>0 else '減碼 '}{t_shares_00713} 股\n"
                 f"2. VOO  : {'補進 +' if t_shares_voo>0 else '減碼 '}{t_shares_voo} 股\n"
                 f"3. SMH  : {'補進 +' if t_shares_smh>0 else '減碼 '}{t_shares_smh} 股\n"
@@ -392,23 +422,16 @@ def main():
     is_monthly_check = (today.day == 1)
 
     baseline_brain = {}
-    
-    # 讀取現有檔案
     if os.path.exists(BASELINE_FILE):
         try:
-            with open(BASELINE_FILE, "r", encoding="utf-8") as f: 
-                baseline_brain = json.load(f)
-        except Exception as e:
-            print(f"⚠️ 讀取現有 JSON 檔案失敗: {e}")
+            with open(BASELINE_FILE, "r", encoding="utf-8") as f: baseline_brain = json.load(f)
+        except: pass
 
-    # 📌 【問題2 修正點】：更明確嚴謹的錯誤與例外熔斷防禦
     if not baseline_brain or is_monthly_check:
         try:
             baseline_brain = update_historical_baseline()
-            if not baseline_brain or len(baseline_brain) <= 1:
-                print("🚨 警告：歷史基準值更新後內容為空，可能各項計算都失敗了")
         except Exception as e:
-            print(f"🚨 更新歷史基準值時發生未預期錯誤: {e}")
+            print(f"🚨 歷史數據更新異常: {e}")
 
     # 每日數據下載
     shared_df = None
