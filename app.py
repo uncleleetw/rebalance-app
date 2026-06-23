@@ -29,7 +29,6 @@ def get_trend_arrow(series):
     return "➡️"
 
 def fetch_shiller_cape_real():
-    """使用純內建字串精確比對法，完全擺脫 BeautifulSoup 第三方依賴"""
     url = "https://www.multpl.com/shiller-pe"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -42,7 +41,7 @@ def fetch_shiller_cape_real():
                 part = html.split('id="current"')[1].split('</div')[0]
                 if '<b>' in part:
                     val_str = part.split('<b>')[1].split('</b>')[0].strip()
-                    return [float(val_str)] * 150  # 模擬常態分佈分位數
+                    return [float(val_str)] * 150
         return None
     except Exception as e:
         print(f"❌ Shiller CAPE 數據提取異常: {e}")
@@ -118,14 +117,6 @@ def update_historical_baseline():
         with open(BASELINE_FILE, "w", encoding="utf-8") as f:
             json.dump(baseline_data, f, ensure_ascii=False, indent=2)
     except: pass
-
-    print(f"✅ 驗證寫入結果：")
-    for key in ["vix", "yield_spread", "tw_bias", "shiller_cape", "buffett_indicator"]:
-        if key in baseline_data and baseline_data[key] is not None:
-            print(f"  - {key}: 已寫入，數據筆數約 {len(baseline_data[key].get('percentiles', []))}")
-        else:
-            print(f"  - {key}: ⚠️ 未成功寫入！")
-
     return baseline_data
 
 def get_percentile(value, p_dict, key_name):
@@ -142,6 +133,38 @@ def get_percentile(value, p_dict, key_name):
     for i, p_val in enumerate(p_list):
         if value <= p_val: return f"{i + 1}%"
     return "100%"
+
+# =========================================================================
+# 📢 新增核心：情境交叉研判模組
+# =========================================================================
+def get_situation_assessment(data, vix_l, yield_l, hy_l, twd_l, tw_l, pe_l):
+    """
+    接收各項即時數據與燈號變數，執行宏觀情境研判
+    """
+    vix_val = data.get('vix')
+    
+    # 3. 注意事項規定：若 VIX 數據本身是「延遲 ⏳」(None)，跳過研判
+    if vix_val is None:
+        return "📊 情境研判：數據不足，暫不研判"
+        
+    # 統計除了 VIX 以外的其他 5 項每日指標燈號
+    other_lights = [yield_l, hy_l, twd_l, tw_l, pe_l]
+    # 統計每日全部 6 項指標燈號
+    all_lights = [vix_l, yield_l, hy_l, twd_l, tw_l, pe_l]
+    
+    green_yellow_count_other = sum(1 for l in other_lights if l in ["🟢", "🟡"])
+    red_count_all = sum(1 for l in all_lights if l == "🔴")
+    
+    # 規則一：恐慌性下殺判定
+    if vix_val > 30 and green_yellow_count_other >= 4:
+        return "📢 情境研判：恐慌性下殺 - 基本面未同步惡化，可考慮分批加碼"
+        
+    # 規則二：系統性風險判定
+    if vix_val > 27 and red_count_all >= 3 and hy_l == "🔴" and (yield_l in ["🟡", "🔴"]):
+        return "🚨 情境研判：系統性風險 - 基本面同步惡化，暫停進場，優先保護質押維持率"
+        
+    # 兩條規則都不觸發時
+    return "📊 情境研判：正常市場波動，依總分燈號正常操作"
 
 # =========================================================================
 # 🧠 第一大核心：總經加權風控塔台
@@ -244,57 +267,73 @@ def get_risk_control_report(df, baseline_brain):
         data['tw_bias_arrow'] = get_trend_arrow(twii_series)
     except: data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
 
-    # 🚦 歷史百分位對齊
+    # 🚦 分項原始燈號初評 (供總分統計與情境研判使用)
     total_score = 0
-    p_vix = get_percentile(data.get('vix', 0), baseline_brain, "vix") if data.get('vix') else "暫無"
-    p_spd = get_percentile(data.get('yield_spread_bps', 0), baseline_brain, "yield_spread") if data.get('yield_spread_bps') else "暫無"
-    p_bias = get_percentile(data.get('tw_bias', 0), baseline_brain, "tw_bias") if data.get('tw_bias') else "暫無"
-
+    
+    # VIX 燈號
     if data.get('vix') is not None:
-        vix_txt = f"{data['vix']:.2f} {data['vix_arrow']} (歷史百分位: {p_vix})"
         vix_l = "🔴" if data['vix'] > 30 else ("🟡" if data['vix'] > 20 else "🟢")
         total_score += 2 if data['vix'] > 30 else (1 if data['vix'] > 20 else 0)
-    else: vix_txt, vix_l = "延遲 ⏳", "⚪"
+    else: vix_l = "⚪"
 
+    # PE 燈號
     if data.get('pe_ratio') is not None:
-        pe_txt = f"{data['pe_ratio']:.1f}倍"
         pe_l = "🔴" if data['pe_ratio'] > 30 else ("🟡" if data['pe_ratio'] > 26 else "🟢")
         total_score += 2 if data['pe_ratio'] > 30 else (1 if data['pe_ratio'] > 26 else 0)
-    else: pe_txt, pe_l = "延遲 ⏳", "⚪"
+    else: pe_l = "⚪"
 
+    # 利差燈號 (倒掛時利差 < 0 為 🟡 或 🔴)
     if data.get('yield_spread_bps') is not None:
-        yield_txt = f"{data['yield_spread_bps']:.1f} bps {data['yield_arrow']} (歷史百分位: {p_spd})"
         yield_l = "🔴" if data['yield_spread_bps'] < -50 else ("🟡" if data['yield_spread_bps'] < 0 else "🟢")
         total_score += 2 if data['yield_spread_bps'] < -50 else (1 if data['yield_spread_bps'] < 0 else 0)
-    else: yield_txt, yield_l = "延遲 ⏳", "⚪"
+    else: yield_l = "⚪"
 
+    # HYG 動能燈號
     if data.get('hy_oas') is not None:
-        hy_txt = f"{data['hy_oas']:+.2f}% {data['hy_arrow']}"
         hy_l = "🔴" if data['hy_oas'] < -3.5 else ("🟡" if data['hy_oas'] < -1.5 else "🟢")
         total_score += 2 if data['hy_oas'] < -3.5 else (1 if data['hy_oas'] < -1.5 else 0)
-    else: hy_txt, hy_l = "延遲 ⏳", "⚪"
+    else: hy_l = "⚪"
 
+    # 匯率偏離燈號
     if data.get('twd_bias_pct') is not None:
-        twd_txt = f"{data['twd_fx']:.2f} ({data['twd_bias_pct']:+.1f}%) {data['twd_arrow']}"
         twd_l = "🔴" if data['twd_bias_pct'] > 1.5 else ("🟡" if data['twd_bias_pct'] > 0.5 else "🟢")
         total_score += 2 if data['twd_bias_pct'] > 1.5 else (1 if data['twd_bias_pct'] > 0.5 else 0)
-    else: twd_txt, twd_l = "延遲 ⏳", "⚪"
+    else: twd_l = "⚪"
 
+    # 台股乖離燈號
     if data.get('tw_bias') is not None:
-        tw_txt = f"{data['tw_bias']:.1f}% {data['tw_bias_arrow']} (歷史百分位: {p_bias})"
         tw_l = "🔴" if (data['tw_bias'] > 6 or data['tw_bias'] < -8) else ("🟡" if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5) else "🟢")
         total_score += 2 if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else (1 if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else 0)
-    else: tw_txt, tw_l = "延遲 ⏳", "⚪"
+    else: tw_l = "⚪"
 
+    # 判定總體指揮燈號說明
     if total_score >= 9: status_light = "🔴 【四級極端風暴】請啟動質押分批解鎖退場/拉高維持率"
     elif total_score >= 6: status_light = "🟠 【三級高風險】減碼/停止槓桿加碼"
     elif total_score >= 3: status_light = "🟡 【二級市場觀望】暫緩追高"
     else: status_light = "🟢 【一級安全綠燈】紀律加碼/維持常態"
 
+    # 🚀 呼叫新增之交叉判斷函式
+    situation_msg = get_situation_assessment(data, vix_l, yield_l, hy_l, twd_l, tw_l, pe_l)
+
+    # 歷史百分位字串排版
+    p_vix = get_percentile(data.get('vix', 0), baseline_brain, "vix") if data.get('vix') else "暫無"
+    p_spd = get_percentile(data.get('yield_spread_bps', 0), baseline_brain, "yield_spread") if data.get('yield_spread_bps') else "暫無"
+    p_bias = get_percentile(data.get('tw_bias', 0), baseline_brain, "tw_bias") if data.get('tw_bias') else "暫無"
+
+    vix_txt = f"{data['vix']:.2f} {data['vix_arrow']} (歷史百分位: {p_vix})" if data.get('vix') is not None else "延遲 ⏳"
+    pe_txt = f"{data['pe_ratio']:.1f}倍" if data.get('pe_ratio') is not None else "延遲 ⏳"
+    yield_txt = f"{data['yield_spread_bps']:.1f} bps {data['yield_arrow']} (歷史百分位: {p_spd})" if data.get('yield_spread_bps') is not None else "延遲 ⏳"
+    hy_txt = f"{data['hy_oas']:+.2f}% {data['hy_arrow']}" if data.get('hy_oas') is not None else "延遲 ⏳"
+    twd_txt = f"{data['twd_fx']:.2f} ({data['twd_bias_pct']:+.1f}%) {data['twd_arrow']}" if data.get('twd_bias_pct') is not None else "延遲 ⏳"
+    tw_txt = f"{data['tw_bias']:.1f}% {data['tw_bias_arrow']} (歷史百分位: {p_bias})" if data.get('tw_bias') is not None else "延遲 ⏳"
+
+    # 🧱 拼裝符合規格的完美新結構報告
     report = (
         f"🚨 【unclelee 總經加權風控塔台】\n"
         f"⏰ {taiwan_time.strftime('%m-%d %H:%M')}\n"
         f"🚦 指揮燈號：{status_light}\n"
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"{situation_msg}\n"  # 🎯 完美插入新增的情境研判欄位
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         f"📊 【每日核心量化指標體檢】\n"
         f"• VIX 恐慌指數 : {vix_txt} | 風險: {vix_l}\n"
@@ -435,7 +474,6 @@ def main():
         except Exception as e:
             print(f"🚨 歷史數據更新異常: {e}")
 
-    # 每日數據下載
     shared_df = None
     try:
         tickers = ["^VIX", "SPY", "^GSPC", "HYG", "TWD=X", "^TWII", "00713.TW", "VOO", "SMH"]
