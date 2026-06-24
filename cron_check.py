@@ -29,6 +29,23 @@ def get_trend_arrow(series):
     elif current < prev: return "🔻"
     return "➡️"
 
+def get_recession_prob_from_fred():
+    """從 FRED 抓取最新美國經濟衰退機率 (RECPROUSM156N)"""
+    url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=RECPROUSM156N"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            lines = response.text.strip().split('\n')
+            # 從尾端向前尋找第一個有效數值
+            for line in reversed(lines[1:]):
+                p = line.split(',')
+                if len(p) == 2 and p[1].strip() != '.':
+                    return float(p[1].strip()), p[0].strip()
+        return None, None
+    except Exception as e:
+        print(f"❌ FRED 衰退機率抓取異常: {e}")
+        return None, None
+
 def fetch_shiller_cape_real():
     url = "https://www.multpl.com/shiller-pe"
     headers = {
@@ -101,7 +118,7 @@ def update_historical_baseline():
         w5000_df = yf.download("^W5000", period="15y", progress=False)
         if 'Close' in w5000_df.columns:
             buffett_series = (w5000_df['Close'] / BASELINE_W5000) * BASELINE_BUFFETT_PCT
-            baseline_data["buffett_indicator"] = calculate_metrics_summary(buffett_series.dropna().tolist())
+            baseline_data["buffett_indicator"] = calculate_metrics_summary(w5000_df['Close'].dropna().tolist())
     except Exception as e: print(f"❌ 巴菲特指標歷史計算失敗: {e}")
 
     baseline_data["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -149,7 +166,7 @@ def get_situation_assessment(data, vix_l, yield_l, hy_l, twd_l, tw_l, pe_l):
     return "📊 情境研判：正常市場波動，依總分燈號正常操作"
 
 # =========================================================================
-# 🧠 第一大核心：總經加權風控塔台 (🛠️ 已補回 None 隔離與 90 天上限)
+# 🧠 第一大核心：總經加權風控塔台
 # =========================================================================
 def get_risk_control_report(df, baseline_brain):
     taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
@@ -267,6 +284,7 @@ def get_risk_control_report(df, baseline_brain):
     except: data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
 
     # --- 月度核心指標數據抓取 ---
+    auto_val, auto_date = None, None
     if is_monthly_check:
         try:
             current_cape_url = "https://www.multpl.com/shiller-pe"
@@ -283,10 +301,31 @@ def get_risk_control_report(df, baseline_brain):
             data['buffett_indicator'] = round(BASELINE_BUFFETT_PCT * (w5000_val / BASELINE_W5000), 1)
         except: data['buffett_indicator'] = None
 
-        data['recession_prob'] = config_data.get("recession_probability_manual", None)
+        # 🛠️ 修正 2 & 3: 嘗試自動從 FRED 抓取衰退機率並安全回寫 config.json
+        auto_val, auto_date = get_recession_prob_from_fred()
+        if auto_val is not None:
+            data['recession_prob'] = auto_val
+            try:
+                config_path = "config.json"
+                current_config = {}
+                if os.path.exists(config_path):
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        current_config = json.load(f)
+                # 僅單獨覆蓋或寫入衰退機率欄位，絕對不破壞其他持股數據
+                current_config["recession_probability_manual"] = auto_val
+                current_config["recession_probability_last_updated"] = auto_date
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(current_config, f, ensure_ascii=False, indent=4)
+                print(f"✅ 衰退機率已自動更新至 config.json：{auto_val}% ({auto_date})")
+            except Exception as e:
+                print(f"⚠️ 衰退機率寫入 config.json 失敗: {e}")
+        else:
+            # FRED 抓取失敗時防禦，自動退回使用 config.json 的舊值
+            data['recession_prob'] = config_data.get("recession_probability_manual", None)
+            print("⚠️ 衰退機率自動抓取失敗，使用 config.json 舊值")
 
     # =========================================================================
-    # 🚦 燈號統計 (🛠️ 修正：先判斷 is not None，缺失時強制為 ⚪ 且不計分)
+    # 🚦 燈號統計 (先判斷 is not None，缺失時強制為 ⚪ 且不計分)
     # =========================================================================
     total_score = 0
     
@@ -353,7 +392,7 @@ def get_risk_control_report(df, baseline_brain):
         elif total_score >= 3: status_light = "🟡 【二級市場觀望】暫緩追高"
         else: status_light = "🟢 【一級安全綠燈】紀律加碼/維持常態"
 
-    # 🛠️ 修正：風險歷史軌跡去重寫入，並強制加上 [ -90: ] 滑動視窗上限
+    # 風險歷史軌跡去重寫入（帶 90 天上限）
     yesterday_score_text = "🔄 啟動"
     try:
         rh_data = {"records": []}
@@ -368,7 +407,6 @@ def get_risk_control_report(df, baseline_brain):
             yesterday_score_text = f"{prev_score} → {total_score} ({arrow}{diff}{lbl})"
         past_records.append({"date": today_str, "total_score": total_score})
         
-        # ⚡ 補回 90 天上限避免檔案隨時間無限增長
         rh_data["records"] = past_records[-90:]
         with open(RISK_HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(rh_data, f, indent=2)
     except Exception as e: print(f"⚠️ 軌跡讀寫失敗: {e}")
@@ -408,7 +446,15 @@ def get_risk_control_report(df, baseline_brain):
         
         cape_txt = f"{data['shiller_cape']:.1f}倍 (歷史百分位: {p_cape})" if data.get('shiller_cape') is not None else "延遲 ⏳"
         bft_txt = f"{data['buffett_indicator']:.1f}% (歷史百分位: {p_bft})" if data.get('buffett_indicator') is not None else "延遲 ⏳"
-        rec_txt = f"{data['recession_prob']:.1f}%" if data.get('recession_prob') is not None else "未設定 ⏳"
+        
+        # 🛠️ 修正 4: 根據自動抓取結果顯示動態日期或提示存檔舊值
+        if data.get('recession_prob') is not None:
+            if auto_val is not None:
+                rec_txt = f"{data['recession_prob']:.1f}% (資料日期: {auto_date})"
+            else:
+                rec_txt = f"{data['recession_prob']:.1f}% (上次存檔值)"
+        else:
+            rec_txt = "未設定 ⏳"
         
         report += (
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
