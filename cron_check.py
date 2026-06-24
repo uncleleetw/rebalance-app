@@ -30,13 +30,11 @@ def get_trend_arrow(series):
     return "➡️"
 
 def get_recession_prob_from_fred():
-    """從 FRED 抓取最新美國經濟衰退機率 (RECPROUSM156N)"""
     url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=RECPROUSM156N"
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200:
             lines = response.text.strip().split('\n')
-            # 從尾端向前尋找第一個有效數值
             for line in reversed(lines[1:]):
                 p = line.split(',')
                 if len(p) == 2 and p[1].strip() != '.':
@@ -117,8 +115,9 @@ def update_historical_baseline():
     try:
         w5000_df = yf.download("^W5000", period="15y", progress=False)
         if 'Close' in w5000_df.columns:
+            # 🛠️ 已修正 Bug：將歷史點位精準轉換為巴菲特百分比量綱後再送入計算
             buffett_series = (w5000_df['Close'] / BASELINE_W5000) * BASELINE_BUFFETT_PCT
-            baseline_data["buffett_indicator"] = calculate_metrics_summary(w5000_df['Close'].dropna().tolist())
+            baseline_data["buffett_indicator"] = calculate_metrics_summary(buffett_series.dropna().tolist())
     except Exception as e: print(f"❌ 巴菲特指標歷史計算失敗: {e}")
 
     baseline_data["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -301,7 +300,6 @@ def get_risk_control_report(df, baseline_brain):
             data['buffett_indicator'] = round(BASELINE_BUFFETT_PCT * (w5000_val / BASELINE_W5000), 1)
         except: data['buffett_indicator'] = None
 
-        # 🛠️ 修正 2 & 3: 嘗試自動從 FRED 抓取衰退機率並安全回寫 config.json
         auto_val, auto_date = get_recession_prob_from_fred()
         if auto_val is not None:
             data['recession_prob'] = auto_val
@@ -311,7 +309,6 @@ def get_risk_control_report(df, baseline_brain):
                 if os.path.exists(config_path):
                     with open(config_path, "r", encoding="utf-8") as f:
                         current_config = json.load(f)
-                # 僅單獨覆蓋或寫入衰退機率欄位，絕對不破壞其他持股數據
                 current_config["recession_probability_manual"] = auto_val
                 current_config["recession_probability_last_updated"] = auto_date
                 with open(config_path, "w", encoding="utf-8") as f:
@@ -320,7 +317,6 @@ def get_risk_control_report(df, baseline_brain):
             except Exception as e:
                 print(f"⚠️ 衰退機率寫入 config.json 失敗: {e}")
         else:
-            # FRED 抓取失敗時防禦，自動退回使用 config.json 的舊值
             data['recession_prob'] = config_data.get("recession_probability_manual", None)
             print("⚠️ 衰退機率自動抓取失敗，使用 config.json 舊值")
 
@@ -333,43 +329,37 @@ def get_risk_control_report(df, baseline_brain):
     if data.get('vix') is not None:
         vix_l = "🔴" if data['vix'] > 30 else ("🟡" if data['vix'] > 20 else "🟢")
         total_score += 2 if data['vix'] > 30 else (1 if data['vix'] > 20 else 0)
-    else:
-        vix_l = "⚪"
+    else: vix_l = "⚪"
 
     # 2. S&P500 本益比
     if data.get('pe_ratio') is not None:
         pe_l = "🔴" if data['pe_ratio'] > 30 else ("🟡" if data['pe_ratio'] > 26 else "🟢")
         total_score += 2 if data['pe_ratio'] > 30 else (1 if data['pe_ratio'] > 26 else 0)
-    else:
-        pe_l = "⚪"
+    else: pe_l = "⚪"
 
     # 3. 10Y-2Y 美債利差
     if data.get('yield_spread_bps') is not None:
         yield_l = "🔴" if data['yield_spread_bps'] < -50 else ("🟡" if data['yield_spread_bps'] < 0 else "🟢")
         total_score += 2 if data['yield_spread_bps'] < -50 else (1 if data['yield_spread_bps'] < 0 else 0)
-    else:
-        yield_l = "⚪"
+    else: yield_l = "⚪"
 
     # 4. 高收益債動能
     if data.get('hy_oas') is not None:
         hy_l = "🔴" if data['hy_oas'] < -3.5 else ("🟡" if data['hy_oas'] < -1.5 else "🟢")
         total_score += 2 if data['hy_oas'] < -3.5 else (1 if data['hy_oas'] < -1.5 else 0)
-    else:
-        hy_l = "⚪"
+    else: hy_l = "⚪"
 
     # 5. 台幣匯率偏離
     if data.get('twd_bias_pct') is not None:
         twd_l = "🔴" if data['twd_bias_pct'] > 1.5 else ("🟡" if data['twd_bias_pct'] > 0.5 else "🟢")
         total_score += 2 if data['twd_bias_pct'] > 1.5 else (1 if data['twd_bias_pct'] > 0.5 else 0)
-    else:
-        twd_l = "⚪"
+    else: twd_l = "⚪"
 
     # 6. 台股20日乖離
     if data.get('tw_bias') is not None:
         tw_l = "🔴" if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else ("🟡" if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else "🟢")
         total_score += 2 if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else (1 if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else 0)
-    else:
-        tw_l = "⚪"
+    else: tw_l = "⚪"
 
     # 月度長檢計分附加
     if is_monthly_check:
@@ -447,14 +437,12 @@ def get_risk_control_report(df, baseline_brain):
         cape_txt = f"{data['shiller_cape']:.1f}倍 (歷史百分位: {p_cape})" if data.get('shiller_cape') is not None else "延遲 ⏳"
         bft_txt = f"{data['buffett_indicator']:.1f}% (歷史百分位: {p_bft})" if data.get('buffett_indicator') is not None else "延遲 ⏳"
         
-        # 🛠️ 修正 4: 根據自動抓取結果顯示動態日期或提示存檔舊值
         if data.get('recession_prob') is not None:
             if auto_val is not None:
                 rec_txt = f"{data['recession_prob']:.1f}% (資料日期: {auto_date})"
             else:
                 rec_txt = f"{data['recession_prob']:.1f}% (上次存檔值)"
-        else:
-            rec_txt = "未設定 ⏳"
+        else: rec_txt = "未設定 ⏳"
         
         report += (
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
