@@ -2,6 +2,7 @@ import os
 import json
 import datetime
 import requests
+import re
 import numpy as np
 import yfinance as yf
 import pandas as pd
@@ -115,7 +116,6 @@ def update_historical_baseline():
     try:
         w5000_df = yf.download("^W5000", period="15y", progress=False)
         if 'Close' in w5000_df.columns:
-            # 🛠️ 已修正 Bug：將歷史點位精準轉換為巴菲特百分比量綱後再送入計算
             buffett_series = (w5000_df['Close'] / BASELINE_W5000) * BASELINE_BUFFETT_PCT
             baseline_data["buffett_indicator"] = calculate_metrics_summary(buffett_series.dropna().tolist())
     except Exception as e: print(f"❌ 巴菲特指標歷史計算失敗: {e}")
@@ -285,12 +285,29 @@ def get_risk_control_report(df, baseline_brain):
     # --- 月度核心指標數據抓取 ---
     auto_val, auto_date = None, None
     if is_monthly_check:
+        # 🛠️ 【修正1】：換裝具備詳細 Log 與 Regex 正則表達式防護的 CAPE 升級版爬蟲
         try:
             current_cape_url = "https://www.multpl.com/shiller-pe"
-            current_cape_resp = requests.get(current_cape_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10).text
-            real_cape_val = float(current_cape_resp.split('id="current"')[1].split('<b>')[1].split('</b>')[0].strip())
-            data['shiller_cape'] = real_cape_val
-        except: data['shiller_cape'] = None
+            current_cape_resp = requests.get(current_cape_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}, timeout=10)
+            print(f"ℹ️ [CAPE 診斷] 網站回應狀態碼: {current_cape_resp.status_code}")
+            html_content = current_cape_resp.text
+            
+            if "id=\"current\"" not in html_content:
+                print("⚠️ [CAPE 警告] 網頁中找不到 id=\"current\"！目前的 HTML 前 1000 字元如下：")
+                print(html_content[:1000])
+            
+            if 'id="current"' in html_content and '<b>' in html_content:
+                real_cape_val = float(html_content.split('id="current"')[1].split('<b>')[1].split('</b>')[0].strip())
+                data['shiller_cape'] = real_cape_val
+            else:
+                match = re.search(r'id="current"[^>]*>\s*([\d\.]+)', html_content)
+                if match:
+                    data['shiller_cape'] = float(match.group(1))
+                    print(f"🎯 [CAPE 備援成功] 經正則表達式強制解析成功: {data['shiller_cape']}")
+                else: raise Exception("所有解析邏輯皆失效")
+        except Exception as e:
+            print(f"❌ [CAPE 嚴重錯誤] 無法取得或解析 CAPE 指標: {e}")
+            data['shiller_cape'] = None
 
         try:
             if close_df is not None and hasattr(close_df, 'columns') and '^W5000' in close_df.columns:
@@ -325,43 +342,36 @@ def get_risk_control_report(df, baseline_brain):
     # =========================================================================
     total_score = 0
     
-    # 1. VIX 指數
     if data.get('vix') is not None:
         vix_l = "🔴" if data['vix'] > 30 else ("🟡" if data['vix'] > 20 else "🟢")
         total_score += 2 if data['vix'] > 30 else (1 if data['vix'] > 20 else 0)
     else: vix_l = "⚪"
 
-    # 2. S&P500 本益比
     if data.get('pe_ratio') is not None:
         pe_l = "🔴" if data['pe_ratio'] > 30 else ("🟡" if data['pe_ratio'] > 26 else "🟢")
         total_score += 2 if data['pe_ratio'] > 30 else (1 if data['pe_ratio'] > 26 else 0)
     else: pe_l = "⚪"
 
-    # 3. 10Y-2Y 美債利差
     if data.get('yield_spread_bps') is not None:
         yield_l = "🔴" if data['yield_spread_bps'] < -50 else ("🟡" if data['yield_spread_bps'] < 0 else "🟢")
         total_score += 2 if data['yield_spread_bps'] < -50 else (1 if data['yield_spread_bps'] < 0 else 0)
     else: yield_l = "⚪"
 
-    # 4. 高收益債動能
     if data.get('hy_oas') is not None:
         hy_l = "🔴" if data['hy_oas'] < -3.5 else ("🟡" if data['hy_oas'] < -1.5 else "🟢")
         total_score += 2 if data['hy_oas'] < -3.5 else (1 if data['hy_oas'] < -1.5 else 0)
     else: hy_l = "⚪"
 
-    # 5. 台幣匯率偏離
     if data.get('twd_bias_pct') is not None:
         twd_l = "🔴" if data['twd_bias_pct'] > 1.5 else ("🟡" if data['twd_bias_pct'] > 0.5 else "🟢")
         total_score += 2 if data['twd_bias_pct'] > 1.5 else (1 if data['twd_bias_pct'] > 0.5 else 0)
     else: twd_l = "⚪"
 
-    # 6. 台股20日乖離
     if data.get('tw_bias') is not None:
         tw_l = "🔴" if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else ("🟡" if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else "🟢")
         total_score += 2 if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else (1 if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else 0)
     else: tw_l = "⚪"
 
-    # 月度長檢計分附加
     if is_monthly_check:
         if data.get('shiller_cape') is not None:
             total_score += 0 if data['shiller_cape'] < 25 else (1 if data['shiller_cape'] < 32 else (2 if data['shiller_cape'] < 40 else 3))
@@ -370,7 +380,6 @@ def get_risk_control_report(df, baseline_brain):
         if data.get('recession_prob') is not None:
             total_score += 0 if data['recession_prob'] < 15 else (1 if data['recession_prob'] < 30 else (2 if data['recession_prob'] < 50 else 3))
 
-    # 指揮決策燈號判定
     if is_monthly_check:
         if total_score >= 15: status_light = "🔴 【四級極端風暴】請啟動質押分批解鎖退場/拉高維持率"
         elif total_score >= 10: status_light = "🟠 【三級高風險】減碼/停止槓桿加碼"
@@ -382,7 +391,6 @@ def get_risk_control_report(df, baseline_brain):
         elif total_score >= 3: status_light = "🟡 【二級市場觀望】暫緩追高"
         else: status_light = "🟢 【一級安全綠燈】紀律加碼/維持常態"
 
-    # 風險歷史軌跡去重寫入（帶 90 天上限）
     yesterday_score_text = "🔄 啟動"
     try:
         rh_data = {"records": []}
@@ -437,9 +445,10 @@ def get_risk_control_report(df, baseline_brain):
         cape_txt = f"{data['shiller_cape']:.1f}倍 (歷史百分位: {p_cape})" if data.get('shiller_cape') is not None else "延遲 ⏳"
         bft_txt = f"{data['buffett_indicator']:.1f}% (歷史百分位: {p_bft})" if data.get('buffett_indicator') is not None else "延遲 ⏳"
         
+        # 🛠️ 【修正2】：為月度報告的聯準會衰退率加上擴張期常態比對提示，避免數據誤判
         if data.get('recession_prob') is not None:
             if auto_val is not None:
-                rec_txt = f"{data['recession_prob']:.1f}% (資料日期: {auto_date})"
+                rec_txt = f"{data['recession_prob']:.1f}% (資料日期: {auto_date}，擴張期常態<1%)"
             else:
                 rec_txt = f"{data['recession_prob']:.1f}% (上次存檔值)"
         else: rec_txt = "未設定 ⏳"
