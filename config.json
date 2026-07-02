@@ -2,8 +2,8 @@
     "shares_00713": 10500,
     "shares_voo": 28,
     "shares_smh": 15,
-    "recession_probability_manual": 0.44,
-    "recession_probability_last_updated": "2026-04-01",
+    "recession_probability_manual": 0.54,
+    "recession_probability_last_updated": "2026-05-01",
     "pending_monthly_checks": {
         "shiller_cape": true,
         "recession_prob": true
