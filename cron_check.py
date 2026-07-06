@@ -6,15 +6,22 @@ import re
 import numpy as np
 import yfinance as yf
 import pandas as pd
+from zoneinfo import ZoneInfo
 
 # =========================================================================
 # ⚙️ 全域核心配置與校正基準
 # =========================================================================
+TW_TZ = ZoneInfo("Asia/Taipei")
+
 BASELINE_W5000 = 75000.0
 BASELINE_BUFFETT_PCT = 225.0
 BASELINE_FILE = "historical_baseline.json"
 RISK_HISTORY_FILE = "risk_history.json"
 CONFIG_PATH = "config.json"
+
+# ⚠️【需人工年度維護】S&P500 近四季 EPS，僅作為 SPY info 抓不到 PE 時的備援分母
+#    最後更新：2026-07（請每半年檢查一次，過期會讓備援 PE 系統性失真）
+SP500_EPS_TTM = 238.5
 
 DEFAULT_VIX_P = [9.8, 10.5, 11.1, 11.4, 11.8, 12.1, 12.3, 12.5, 12.7, 12.9, 13.1, 13.3, 13.4, 13.6, 13.7, 13.9, 14.0, 14.2, 14.3, 14.5, 14.6, 14.7, 14.9, 15.0, 15.1, 15.3, 15.4, 15.5, 15.7, 15.8, 15.9, 16.1, 16.2, 16.4, 16.5, 16.7, 16.8, 17.0, 17.1, 17.3, 17.4, 17.6, 17.7, 17.9, 18.1, 18.2, 18.4, 18.6, 18.8, 19.0, 19.2, 19.4, 19.6, 19.8, 20.0, 20.3, 20.5, 20.8, 21.1, 21.3, 21.6, 21.9, 22.2, 22.6, 22.9, 23.3, 23.7, 24.1, 24.6, 25.1, 25.6, 26.1, 26.6, 27.2, 27.8, 28.5, 29.2, 30.0, 31.0, 31.9, 32.9, 34.0, 35.3, 36.8, 38.2, 39.8, 41.5, 43.1, 45.0, 47.1, 49.9, 53.0, 56.4, 60.1, 64.3, 69.1, 73.6, 78.4, 82.6, 85.0]
 DEFAULT_SPREAD_P = [-90.0, -82.0, -75.0, -70.0, -65.0, -61.0, -58.0, -54.0, -51.0, -48.0, -45.0, -42.0, -39.0, -37.0, -34.0, -32.0, -29.0, -27.0, -24.0, -22.0, -19.0, -17.0, -15.0, -12.0, -10.0, -8.0, -5.0, -3.0, -1.0, 1.0, 4.0, 6.0, 9.0, 11.0, 14.0, 16.0, 19.0, 22.0, 24.0, 27.0, 30.0, 33.0, 35.0, 38.0, 41.0, 44.0, 47.0, 50.0, 53.0, 56.0, 59.0, 62.0, 65.0, 68.0, 71.0, 74.0, 78.0, 81.0, 84.0, 87.0, 91.0, 94.0, 98.0, 102.0, 105.0, 110.0, 114.0, 118.0, 122.0, 126.0, 131.0, 136.0, 140.0, 145.0, 150.0, 155.0, 161.0, 166.0, 172.0, 178.0, 184.0, 191.0, 198.0, 206.0, 214.0, 222.0, 230.0, 240.0, 249.0, 258.0, 267.0, 276.0, 285.0, 294.0, 303.0, 312.0, 321.0, 330.0, 340.0, 350.0]
@@ -23,6 +30,10 @@ DEFAULT_BIAS_P = [-9.5, -8.2, -7.1, -6.3, -5.7, -5.2, -4.8, -4.4, -4.1, -3.8, -3
 # =========================================================================
 # 🛠️ 共通工具函式與大腦核心
 # =========================================================================
+def now_taiwan():
+    """全系統唯一時間來源：不論 runner 在哪個時區都正確"""
+    return datetime.datetime.now(TW_TZ)
+
 def get_trend_arrow(series):
     if series is None or len(series) < 2: return "➡️"
     current = series.iloc[-1]
@@ -30,6 +41,24 @@ def get_trend_arrow(series):
     if current > prev: return "🔺"
     elif current < prev: return "🔻"
     return "➡️"
+
+def yf_close_series(ticker, period):
+    """單一 ticker 收盤序列下載。
+    💡【問題修正】新版 yfinance 單一 ticker 也回傳 MultiIndex 欄位，
+    df['Close'] 會是 DataFrame 而非 Series，舊寫法直接 .tolist() 會炸掉並被
+    bare except 靜默吞掉，導致歷史基準全部建不起來。此處統一 squeeze 處理。"""
+    try:
+        df = yf.download(ticker, period=period, progress=False)
+        if df is None or df.empty or 'Close' not in df:
+            return None
+        close = df['Close']
+        if isinstance(close, pd.DataFrame):
+            close = close.squeeze("columns")
+        close = close.dropna()
+        return close if not close.empty else None
+    except Exception as e:
+        print(f"❌ {ticker} 下載失敗: {e}")
+        return None
 
 def safe_save_config_field(field_key, field_value, sub_key=None):
     """安全修改 config.json 單一欄位之工具函式，絕不破壞持股等其餘數據"""
@@ -44,7 +73,7 @@ def safe_save_config_field(field_key, field_value, sub_key=None):
             current_config[field_key][sub_key] = field_value
         else:
             current_config[field_key] = field_value
-            
+
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(current_config, f, ensure_ascii=False, indent=4)
     except Exception as e:
@@ -60,6 +89,7 @@ def get_recession_prob_from_fred():
                 p = line.split(',')
                 if len(p) == 2 and p[1].strip() != '.':
                     return float(p[1].strip()), p[0].strip()
+        print(f"⚠️ FRED 衰退機率回應異常: HTTP {response.status_code}")
         return None, None
     except Exception as e:
         print(f"❌ FRED 衰退機率抓取異常: {e}")
@@ -82,8 +112,32 @@ def fetch_shiller_cape_real():
             match = re.search(r'id="current"[^>]*>\s*([\d\.]+)', html)
             if match:
                 return float(match.group(1))
+        print(f"⚠️ multpl CAPE 頁面回應異常: HTTP {response.status_code}")
         return None
-    except:
+    except Exception as e:
+        print(f"❌ 席勒 CAPE 抓取異常: {e}")
+        return None
+
+def fetch_shiller_cape_history(max_months=180):
+    """💡【問題修正】抓取 multpl 月度歷史表格建立「真實」CAPE 歷史序列。
+    舊版用 [當前值]*150 建假序列，百分位永遠顯示 1%，具誤導性。"""
+    url = "https://www.multpl.com/shiller-pe/table/by-month"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            print(f"⚠️ multpl CAPE 歷史表回應異常: HTTP {response.status_code}")
+            return None
+        values = re.findall(r'class="right">\s*([\d]+\.?[\d]*)\s*<', response.text)
+        cape_hist = [float(v) for v in values[:max_months]]
+        if len(cape_hist) < 24:
+            print(f"⚠️ CAPE 歷史序列過短（{len(cape_hist)} 筆），視為抓取失敗")
+            return None
+        return cape_hist
+    except Exception as e:
+        print(f"❌ 席勒 CAPE 歷史抓取異常: {e}")
         return None
 
 def calculate_metrics_summary(data_list):
@@ -103,17 +157,21 @@ def update_historical_baseline():
     print("🔄 [歷史基準大腦] 正在背景建構/更新五大指標 15 年歷史百分位數據庫...")
     baseline_data = {}
 
-    try:
-        vix_df = yf.download("^VIX", period="15y", progress=False)
-        vix_close = vix_df['Close'].dropna().tolist() if 'Close' in vix_df.columns else []
-        baseline_data["vix"] = calculate_metrics_summary(vix_close)
-    except Exception as e: print(f"❌ VIX 歷史抓取失敗: {e}")
+    vix_close = yf_close_series("^VIX", "15y")
+    if vix_close is not None:
+        baseline_data["vix"] = calculate_metrics_summary(vix_close.tolist())
+    else:
+        print("❌ VIX 歷史抓取失敗")
+        baseline_data["vix"] = None
 
     try:
         url_10y = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10"
         url_2y = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2"
         df_10y = pd.read_csv(url_10y, na_values=".")
         df_2y = pd.read_csv(url_2y, na_values=".")
+        # FRED 欄位名稱有時是 DATE、有時是 observation_date，統一取第一欄為日期
+        df_10y.columns = ["DATE", "DGS10"]
+        df_2y.columns = ["DATE", "DGS2"]
         df_fred = pd.merge(df_10y, df_2y, on="DATE").dropna()
         df_fred['DGS10'] = pd.to_numeric(df_fred['DGS10'])
         df_fred['DGS2'] = pd.to_numeric(df_fred['DGS2'])
@@ -123,32 +181,42 @@ def update_historical_baseline():
         print(f"❌ FRED 美債利差歷史計算失敗: {e}")
         baseline_data["yield_spread"] = None
 
-    try:
-        tw_df = yf.download("^TWII", period="15y", progress=False)
-        if 'Close' in tw_df.columns:
-            close_series = tw_df['Close']
-            ma20 = close_series.rolling(window=20).mean()
-            bias = (((close_series - ma20) / ma20) * 100).dropna().tolist()
+    twii_close = yf_close_series("^TWII", "15y")
+    if twii_close is not None:
+        try:
+            ma20 = twii_close.rolling(window=20).mean()
+            bias = (((twii_close - ma20) / ma20) * 100).dropna().tolist()
             baseline_data["tw_bias"] = calculate_metrics_summary(bias)
-    except Exception as e: print(f"❌ 台股乖離率歷史計算失敗: {e}")
+        except Exception as e:
+            print(f"❌ 台股乖離率歷史計算失敗: {e}")
+            baseline_data["tw_bias"] = None
+    else:
+        baseline_data["tw_bias"] = None
 
-    cape_raw = fetch_shiller_cape_real()
-    baseline_data["shiller_cape"] = calculate_metrics_summary([cape_raw]*150) if cape_raw else None
+    # 席勒 CAPE：改用真實歷史月度序列
+    cape_hist = fetch_shiller_cape_history()
+    baseline_data["shiller_cape"] = calculate_metrics_summary(cape_hist) if cape_hist else None
 
-    try:
-        w5000_df = yf.download("^W5000", period="15y", progress=False)
-        if 'Close' in w5000_df.columns:
-            # 💡 【問題修正】引入正確量綱換算，避免使用原始點位（數萬點）導致歷史查表完全錯誤
-            buffett_series = (w5000_df['Close'] / BASELINE_W5000) * BASELINE_BUFFETT_PCT
+    # ⚠️【已知限制】巴菲特指標以固定比例縮放 W5000 回推歷史，隱含假設 GDP 不變，
+    #    會使過去指標值被高估、當前百分位被低估。此百分位僅供粗略參考，勿當精確值。
+    w5000_close = yf_close_series("^W5000", "15y")
+    if w5000_close is not None:
+        try:
+            buffett_series = (w5000_close / BASELINE_W5000) * BASELINE_BUFFETT_PCT
             baseline_data["buffett_indicator"] = calculate_metrics_summary(buffett_series.dropna().tolist())
-    except Exception as e: print(f"❌ 巴菲特指標歷史計算失敗: {e}")
+        except Exception as e:
+            print(f"❌ 巴菲特指標歷史計算失敗: {e}")
+            baseline_data["buffett_indicator"] = None
+    else:
+        baseline_data["buffett_indicator"] = None
 
-    baseline_data["last_updated"] = datetime.datetime.now().strftime("%Y-%m-%d")
+    baseline_data["last_updated"] = now_taiwan().strftime("%Y-%m-%d")
 
     try:
         with open(BASELINE_FILE, "w", encoding="utf-8") as f:
             json.dump(baseline_data, f, ensure_ascii=False, indent=2)
-    except: pass
+    except Exception as e:
+        print(f"⚠️ 歷史基準檔寫入失敗: {e}")
     return baseline_data
 
 def get_percentile(value, p_dict, key_name):
@@ -183,44 +251,57 @@ def get_situation_assessment(data, vix_l, yield_l, hy_l, twd_l, tw_l, pe_l):
 # =========================================================================
 # 🧠 第一大核心：總經加權風控塔台
 # =========================================================================
-def get_risk_control_report(df, baseline_brain):
-    taiwan_time = datetime.datetime.now() + datetime.timedelta(hours=8)
+def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
+    """💡【問題修正】taiwan_time 與 is_monthly_check 由 main() 統一計算後傳入，
+    確保「下載清單」「歷史基準更新」「報告門檻」三處對『今天是不是1號』的認知
+    永遠一致。舊版兩處各自判定，UTC runner 上台灣時間 1 號凌晨會出現分裂。"""
     today_str = taiwan_time.strftime("%Y-%m-%d")
-    is_monthly_check = (taiwan_time.day == 1)
     data = {}
 
     config_data = {}
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f: config_data = json.load(f)
-        except: pass
+        except Exception as e:
+            print(f"⚠️ config.json 讀取失敗: {e}")
 
     close_df = df.get('Close') if df is not None and hasattr(df, 'get') else None
 
+    def shared_or_fetch(ticker, period="50d"):
+        """優先用共享下載結果，缺漏時單獨補抓"""
+        try:
+            if close_df is not None and hasattr(close_df, 'columns') and ticker in close_df.columns:
+                s = close_df[ticker].dropna()
+                if not s.empty: return s
+        except Exception as e:
+            print(f"⚠️ 共享數據取 {ticker} 失敗: {e}")
+        try:
+            s = yf.Ticker(ticker).history(period=period)['Close'].dropna()
+            return s if not s.empty else None
+        except Exception as e:
+            print(f"❌ {ticker} 單獨補抓失敗: {e}")
+            return None
+
     # --- 1. 每日核心量化 6 大基礎資料下載 ---
-    try:
-        if close_df is not None and hasattr(close_df, 'columns') and '^VIX' in close_df.columns:
-            vix_series = close_df['^VIX'].dropna()
-        else:
-            vix_series = yf.Ticker("^VIX").history(period="10d")['Close'].dropna()
-        if not vix_series.empty:
-            data['vix'] = float(vix_series.iloc[-1])
-            data['vix_arrow'] = get_trend_arrow(vix_series)
-        else: data['vix'], data['vix_arrow'] = None, "⏳"
-    except: data['vix'], data['vix_arrow'] = None, "⏳"
+    vix_series = shared_or_fetch("^VIX", "10d")
+    if vix_series is not None:
+        data['vix'] = float(vix_series.iloc[-1])
+        data['vix_arrow'] = get_trend_arrow(vix_series)
+    else:
+        data['vix'], data['vix_arrow'] = None, "⏳"
 
     try:
         spy = yf.Ticker("SPY")
         pe_val = spy.info.get('trailingPE') or spy.fast_info.get('trailing_pe') or spy.info.get('forwardPE')
         if pe_val and pe_val > 0: data['pe_ratio'] = float(pe_val)
+        else: raise ValueError("SPY info 無有效 PE")
+    except Exception as e:
+        print(f"⚠️ SPY PE 主路徑失敗，退回 EPS 常數備援: {e}")
+        sp500_close = shared_or_fetch("^GSPC", "10d")
+        if sp500_close is not None:
+            data['pe_ratio'] = round(float(sp500_close.iloc[-1]) / SP500_EPS_TTM, 1)
         else:
-            if close_df is not None and hasattr(close_df, 'columns') and '^GSPC' in close_df.columns:
-                sp500_close = close_df['^GSPC'].dropna()
-            else:
-                sp500_close = yf.Ticker("^GSPC").history(period="10d")['Close'].dropna()
-            if not sp500_close.empty: data['pe_ratio'] = round(float(sp500_close.iloc[-1]) / 238.5, 1)
-            else: data['pe_ratio'] = None
-    except: data['pe_ratio'] = None
+            data['pe_ratio'] = None
 
     t10_val, t02_val = None, None
     try:
@@ -234,7 +315,8 @@ def get_risk_control_report(df, baseline_brain):
         for line in reversed(r02[1:]):
             p = line.split(',')
             if len(p) == 2 and p[1].strip() != '.': t02_val = float(p[1].strip()); break
-    except: pass
+    except Exception as e:
+        print(f"⚠️ FRED 美債殖利率抓取失敗，將嘗試 yfinance 備援: {e}")
 
     if t10_val is None or t02_val is None:
         try:
@@ -245,63 +327,61 @@ def get_risk_control_report(df, baseline_brain):
                 t02_val = float(t02_s.iloc[-1])
                 if t10_val > 15: t10_val /= 10
                 if t02_val > 15: t02_val /= 10
-        except: pass
+        except Exception as e:
+            print(f"❌ 美債殖利率備援亦失敗: {e}")
 
-    try:
-        if t10_val is not None and t02_val is not None:
-            data['yield_spread_bps'] = round((t10_val - t02_val) * 100, 1)
-            data['yield_arrow'] = "➡️"
-        else: raise Exception("斷訊")
-    except: data['yield_spread_bps'], data['yield_arrow'] = None, "⏳"
+    if t10_val is not None and t02_val is not None:
+        data['yield_spread_bps'] = round((t10_val - t02_val) * 100, 1)
+        data['yield_arrow'] = "➡️"
+    else:
+        data['yield_spread_bps'], data['yield_arrow'] = None, "⏳"
 
-    try:
-        if close_df is not None and hasattr(close_df, 'columns') and 'HYG' in close_df.columns:
-            hyg_series = close_df['HYG'].dropna()
-        else:
-            hyg_series = yf.Ticker("HYG").history(period="50d")['Close'].dropna()
-        if len(hyg_series) >= 30:
-            data['hy_oas'] = round(((hyg_series.iloc[-1] - hyg_series.iloc[-30]) / hyg_series.iloc[-30]) * 100, 2)
-            data['hy_arrow'] = get_trend_arrow(hyg_series)
-        else: data['hy_oas'], data['hy_arrow'] = None, "⏳"
-    except: data['hy_oas'], data['hy_arrow'] = None, "⏳"
+    # 💡 hy_momentum：實為 HYG 近30日「價格變化率」，並非真正的 OAS 利差（舊名 hy_oas 易誤導）
+    hyg_series = shared_or_fetch("HYG", "50d")
+    if hyg_series is not None and len(hyg_series) >= 30:
+        data['hy_momentum'] = round(((hyg_series.iloc[-1] - hyg_series.iloc[-30]) / hyg_series.iloc[-30]) * 100, 2)
+        data['hy_arrow'] = get_trend_arrow(hyg_series)
+    else:
+        data['hy_momentum'], data['hy_arrow'] = None, "⏳"
 
-    try:
-        if close_df is not None and hasattr(close_df, 'columns') and 'TWD=X' in close_df.columns:
-            twd_series = close_df['TWD=X'].dropna()
-        else:
-            twd_series = yf.Ticker("TWD=X").history(period="50d")['Close'].dropna()
-        if len(twd_series) >= 30:
-            current_twd = float(twd_series.iloc[-1])
-            ma_30_twd = twd_series.iloc[-30:].mean()
-            data['twd_fx'] = current_twd
-            data['twd_bias_pct'] = round(((current_twd - ma_30_twd) / ma_30_twd) * 100, 2)
-            data['twd_arrow'] = get_trend_arrow(twd_series)
-        else: data['twd_fx'], data['twd_bias_pct'], data['twd_arrow'] = None, None, "⏳"
-    except: data['twd_fx'], data['twd_bias_pct'], data['twd_arrow'] = None, None, "⏳"
+    twd_series = shared_or_fetch("TWD=X", "50d")
+    if twd_series is not None and len(twd_series) >= 30:
+        current_twd = float(twd_series.iloc[-1])
+        ma_30_twd = twd_series.iloc[-30:].mean()
+        data['twd_fx'] = current_twd
+        data['twd_bias_pct'] = round(((current_twd - ma_30_twd) / ma_30_twd) * 100, 2)
+        data['twd_arrow'] = get_trend_arrow(twd_series)
+    else:
+        data['twd_fx'], data['twd_bias_pct'], data['twd_arrow'] = None, None, "⏳"
 
-    try:
-        if close_df is not None and hasattr(close_df, 'columns') and '^TWII' in close_df.columns:
-            twii_series = close_df['^TWII'].dropna()
-        else:
-            twii_series = yf.Ticker("^TWII").history(period="50d")['Close'].dropna()
-        if len(twii_series) >= 20:
-            current_twii = twii_series.iloc[-1]
-            ma_20 = twii_series.iloc[-20:].mean()
-            data['tw_bias'] = round(((current_twii - ma_20) / ma_20) * 100, 2)
-            data['tw_bias_arrow'] = get_trend_arrow(twii_series)
-        else: data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
-    except: data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
+    twii_series = shared_or_fetch("^TWII", "50d")
+    if twii_series is not None and len(twii_series) >= 20:
+        current_twii = twii_series.iloc[-1]
+        ma_20 = twii_series.iloc[-20:].mean()
+        data['tw_bias'] = round(((current_twii - ma_20) / ma_20) * 100, 2)
+        data['tw_bias_arrow'] = get_trend_arrow(twii_series)
+    else:
+        data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
 
     # =========================================================================
     # ⚙️ 核心調度：追蹤機制狀態初始化與判定邏輯
     # =========================================================================
     pending_status = config_data.get("pending_monthly_checks", {"shiller_cape": False, "recession_prob": False})
-    
+
     if is_monthly_check:
         pending_status = {"shiller_cape": False, "recession_prob": False}
 
-    success_catch_notifications = [] 
-    still_tracking_notifications = [] 
+    success_catch_notifications = []
+    still_tracking_notifications = []
+    auto_val, auto_date = None, None
+
+    def recession_data_is_fresh(date_str):
+        """FRED 衰退率資料日期距今 60 天內視為有效（該指標發布本身落後約2個月）"""
+        try:
+            dt_prob = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
+            return (taiwan_time.date() - dt_prob).days <= 60
+        except Exception:
+            return False
 
     # --- 執行常態月度長檢 (1號當天) ---
     if is_monthly_check:
@@ -309,24 +389,18 @@ def get_risk_control_report(df, baseline_brain):
         data['shiller_cape'] = cape_val
         pending_status["shiller_cape"] = (cape_val is None)
 
-        try:
-            if close_df is not None and hasattr(close_df, 'columns') and '^W5000' in close_df.columns:
-                w5000_val = close_df['^W5000'].dropna().iloc[-1]
-            else:
-                w5000_val = yf.Ticker("^W5000").history(period="10d")['Close'].dropna().iloc[-1]
-            data['buffett_indicator'] = round(BASELINE_BUFFETT_PCT * (w5000_val / BASELINE_W5000), 1)
-        except: data['buffett_indicator'] = None
+        w5000_series = shared_or_fetch("^W5000", "10d")
+        if w5000_series is not None:
+            data['buffett_indicator'] = round(BASELINE_BUFFETT_PCT * (float(w5000_series.iloc[-1]) / BASELINE_W5000), 1)
+        else:
+            data['buffett_indicator'] = None
 
         auto_val, auto_date = get_recession_prob_from_fred()
         if auto_val is not None:
             data['recession_prob'] = auto_val
             safe_save_config_field("recession_probability_manual", auto_val)
             safe_save_config_field("recession_probability_last_updated", auto_date)
-            try:
-                dt_prob = datetime.datetime.strptime(auto_date, "%Y-%m-%d")
-                days_diff = (datetime.datetime.now() - dt_prob).days
-                pending_status["recession_prob"] = (days_diff > 60)
-            except: pending_status["recession_prob"] = False
+            pending_status["recession_prob"] = not recession_data_is_fresh(auto_date)
         else:
             data['recession_prob'] = config_data.get("recession_probability_manual", None)
             pending_status["recession_prob"] = True
@@ -352,17 +426,13 @@ def get_risk_control_report(df, baseline_brain):
             auto_val, auto_date = get_recession_prob_from_fred()
             if auto_val is not None:
                 data['recession_prob'] = auto_val
-                try:
-                    dt_prob = datetime.datetime.strptime(auto_date, "%Y-%m-%d")
-                    days_diff = (datetime.datetime.now() - dt_prob).days
-                    if days_diff <= 60:
-                        pending_status["recession_prob"] = False
-                except: pass
-                
+                if recession_data_is_fresh(auto_date):
+                    pending_status["recession_prob"] = False
+
                 safe_save_config_field("recession_probability_manual", auto_val)
                 safe_save_config_field("recession_probability_last_updated", auto_date)
                 safe_save_config_field("pending_monthly_checks", pending_status)
-                
+
                 if not pending_status["recession_prob"]:
                     success_catch_notifications.append(f"- 聯準會衰退率已補獲：{auto_val:.1f}%（資料日期: {auto_date}）✅")
                 else:
@@ -401,9 +471,9 @@ def get_risk_control_report(df, baseline_brain):
         yield_score = 0
 
     # 4. 高收益債動能
-    if data.get('hy_oas') is not None:
-        hy_l = "🔴" if data['hy_oas'] < -3.5 else ("🟡" if data['hy_oas'] < -1.5 else "🟢")
-        hy_score = 2 if data['hy_oas'] < -3.5 else (1 if data['hy_oas'] < -1.5 else 0)
+    if data.get('hy_momentum') is not None:
+        hy_l = "🔴" if data['hy_momentum'] < -3.5 else ("🟡" if data['hy_momentum'] < -1.5 else "🟢")
+        hy_score = 2 if data['hy_momentum'] < -3.5 else (1 if data['hy_momentum'] < -1.5 else 0)
     else:
         hy_l = "⚪"
         hy_score = 0
@@ -428,22 +498,33 @@ def get_risk_control_report(df, baseline_brain):
     total_score = vix_score + pe_score + yield_score + hy_score + twd_score + tw_score
 
     # 月度長檢指標額外計分 (僅在1號觸發)
+    # 💡【問題修正】記錄「實際成功計分」的月度指標數，門檻隨之動態調整，
+    #    避免月檢當天指標抓失敗時，分母變小但門檻沒降 → 假綠燈
+    n_monthly_scored = 0
     if is_monthly_check:
-        if data.get('shiller_cape') is not None: 
+        if data.get('shiller_cape') is not None:
             total_score += 0 if data['shiller_cape'] < 25 else (1 if data['shiller_cape'] < 32 else (2 if data['shiller_cape'] < 40 else 3))
-        if data.get('buffett_indicator') is not None: 
+            n_monthly_scored += 1
+        if data.get('buffett_indicator') is not None:
             total_score += 0 if data['buffett_indicator'] < 100 else (1 if data['buffett_indicator'] < 150 else (2 if data['buffett_indicator'] < 200 else 3))
-        if data.get('recession_prob') is not None: 
+            n_monthly_scored += 1
+        if data.get('recession_prob') is not None:
             total_score += 0 if data['recession_prob'] < 15 else (1 if data['recession_prob'] < 30 else (2 if data['recession_prob'] < 50 else 3))
+            n_monthly_scored += 1
 
-    # 門檻判定
-    if is_monthly_check and total_score >= 15 or not is_monthly_check and total_score >= 9: 
+    # 門檻判定：日常基準 (9/6/3)，每多一個成功計分的月度指標，門檻按比例上調
+    # n=3 時恰為原設計的 15/10/5；n=0（或非月檢日）退回 9/6/3
+    red_threshold = 9 + 2 * n_monthly_scored
+    orange_threshold = 6 + round(4 * n_monthly_scored / 3)
+    yellow_threshold = 3 + round(2 * n_monthly_scored / 3)
+
+    if total_score >= red_threshold:
         status_light = "🔴 【四級極端風暴】請啟動質押分批解鎖退場/拉高維持率"
-    elif is_monthly_check and total_score >= 10 or not is_monthly_check and total_score >= 6: 
+    elif total_score >= orange_threshold:
         status_light = "🟠 【三級高風險】減碼/停止槓桿加碼"
-    elif is_monthly_check and total_score >= 5 or not is_monthly_check and total_score >= 3: 
+    elif total_score >= yellow_threshold:
         status_light = "🟡 【二級市場觀望】暫緩追高"
-    else: 
+    else:
         status_light = "🟢 【一級安全綠燈】紀律加碼/維持常態"
 
     # 歷史風險軌跡去重滑動儲存
@@ -456,12 +537,15 @@ def get_risk_control_report(df, baseline_brain):
         if past_records:
             prev_score = past_records[-1]["total_score"]
             diff = total_score - prev_score
-            arrow = "🔺+" if diff > 0 else ("🔻" if diff < 0 else "➡️ ")
-            yesterday_score_text = f"{prev_score} → {total_score} ({arrow}{diff}{'持平' if diff == 0 else ''})"
+            if diff > 0: diff_txt = f"🔺+{diff}"
+            elif diff < 0: diff_txt = f"🔻{diff}"
+            else: diff_txt = "➡️ 持平"
+            yesterday_score_text = f"{prev_score} → {total_score} ({diff_txt})"
         past_records.append({"date": today_str, "total_score": total_score})
         rh_data["records"] = past_records[-90:]
         with open(RISK_HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(rh_data, f, indent=2)
-    except: pass
+    except Exception as e:
+        print(f"⚠️ 風險軌跡檔讀寫失敗: {e}")
 
     situation_msg = get_situation_assessment(data, vix_l, yield_l, hy_l, twd_l, tw_l, pe_l)
 
@@ -472,7 +556,7 @@ def get_risk_control_report(df, baseline_brain):
     vix_txt = f"{data['vix']:.2f} {data['vix_arrow']} (歷史百分位: {p_vix})" if data.get('vix') is not None else "延遲 ⏳"
     pe_txt = f"{data['pe_ratio']:.1f}倍" if data.get('pe_ratio') is not None else "延遲 ⏳"
     yield_txt = f"{data['yield_spread_bps']:.1f} bps {data['yield_arrow']} (歷史百分位: {p_spd})" if data.get('yield_spread_bps') is not None else "延遲 ⏳"
-    hy_txt = f"{data['hy_oas']:+.2f}% {data['hy_arrow']}" if data.get('hy_oas') is not None else "延遲 ⏳"
+    hy_txt = f"{data['hy_momentum']:+.2f}% {data['hy_arrow']}" if data.get('hy_momentum') is not None else "延遲 ⏳"
     twd_txt = f"{data['twd_fx']:.2f} ({data['twd_bias_pct']:+.1f}%) {data['twd_arrow']}" if data.get('twd_bias_pct') is not None else "延遲 ⏳"
     tw_txt = f"{data['tw_bias']:.1f}% {data['tw_bias_arrow']} (歷史百分位: {p_bias})" if data.get('tw_bias') is not None else "延遲 ⏳"
 
@@ -496,19 +580,19 @@ def get_risk_control_report(df, baseline_brain):
         p_cape = get_percentile(data['shiller_cape'], baseline_brain, "shiller_cape") if data.get('shiller_cape') is not None else "暫無歷史基準"
         p_bft = get_percentile(data['buffett_indicator'], baseline_brain, "buffett_indicator") if data.get('buffett_indicator') is not None else "暫無歷史基準"
         cape_txt = f"{data['shiller_cape']:.1f}倍 (歷史百分位: {p_cape})" if data.get('shiller_cape') is not None else "延遲 ⏳"
-        bft_txt = f"{data['buffett_indicator']:.1f}% (歷史百分位: {p_bft})" if data.get('buffett_indicator') is not None else "延遲 ⏳"
-        
+        bft_txt = f"{data['buffett_indicator']:.1f}% (歷史百分位: {p_bft}·僅供參考)" if data.get('buffett_indicator') is not None else "延遲 ⏳"
+
         ref_date = auto_date if auto_val is not None else config_data.get("recession_probability_last_updated", "未知")
         rec_txt = f"{data['recession_prob']:.1f}% (資料日期: {ref_date}，擴張期常態<1%)" if data.get('recession_prob') is not None else "未設定 ⏳"
-        
+
         report += (
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-            f"📅 【每月1號大盤長檢指標】\n"
+            f"📅 【每月1號大盤長檢指標】(本月成功計分 {n_monthly_scored}/3 項，門檻已同步調整)\n"
             f"• 席勒CAPE比率 : {cape_txt}\n"
             f"• 修正巴菲特指 : {bft_txt}\n"
             f"• 聯準會衰退率 : {rec_txt}\n"
         )
-    
+
     if not is_monthly_check:
         if success_catch_notifications:
             report += f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n📌 【月度指標補獲通知】\n" + "\n".join(success_catch_notifications) + "\n"
@@ -529,7 +613,8 @@ def get_rebalance_report(df):
                 shares_00713 = cd.get("shares_00713", 10153)
                 shares_voo = cd.get("shares_voo", 28)
                 shares_smh = cd.get("shares_smh", 15)
-        except: pass
+        except Exception as e:
+            print(f"⚠️ config.json 持股讀取失敗，使用預設值: {e}")
 
     target_00713, target_voo, target_smh = 0.40, 0.40, 0.20
     close_df = df.get('Close') if df is not None and hasattr(df, 'get') else None
@@ -539,11 +624,13 @@ def get_rebalance_report(df):
             if close_df is not None and hasattr(close_df, 'columns') and ticker in close_df.columns:
                 series = close_df[ticker].dropna()
                 if not series.empty: return float(series.iloc[-1])
-        except: pass
+        except Exception as e:
+            print(f"⚠️ 共享數據取 {ticker} 價格失敗: {e}")
         try:
             fallback = yf.Ticker(ticker).history(period="15d")['Close'].dropna()
             if not fallback.empty: return float(fallback.iloc[-1])
-        except: pass
+        except Exception as e:
+            print(f"❌ {ticker} 價格補抓失敗: {e}")
         return None
 
     p_voo = safe_get_price_v3(close_df, 'VOO')
@@ -552,10 +639,12 @@ def get_rebalance_report(df):
     p_00713 = safe_get_price_v3(close_df, '00713.TW')
     if p_00713 is None:
         try: p_00713 = float(yf.Ticker("00713.TW").fast_info.get('last_price'))
-        except: p_00713 = None
+        except Exception as e:
+            print(f"❌ 00713 fast_info 補抓失敗: {e}")
+            p_00713 = None
 
     us_market_status = "正常交易 ✅" if p_voo and p_smh else "休市 💤"
-    
+
     v_00713 = shares_00713 * p_00713 if p_00713 else 0
     v_voo = shares_voo * p_voo * usd_to_twd if p_voo else 0
     v_smh = shares_smh * p_smh * usd_to_twd if p_smh else 0
@@ -586,7 +675,7 @@ def get_rebalance_report(df):
         f"  💰 價值: NT$ {round(v_smh):,} 元 | 比率: {act_smh*100:.1f}% (目標 20%) | 偏離: {dev_smh:+.1f}%\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
     )
-    
+
     if p_voo and p_smh and p_00713:
         if abs(dev_00713) > 5.0 or abs(dev_voo) > 5.0 or abs(dev_smh) > 5.0:
             t_shares_00713 = round((total_portfolio_value * target_00713 - v_00713) / p_00713)
@@ -604,25 +693,36 @@ def get_rebalance_report(df):
 def send_line_message(message_text):
     token = os.environ.get("LINE_CHANNEL_ACCESS_TOKEN")
     user_id = os.environ.get("LINE_USER_ID")
-    if not token or not user_id: return
+    if not token or not user_id:
+        print("⚠️ LINE 環境變數未設定，跳過推播")
+        return
     url = "https://api.line.me/v2/bot/message/push"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
-    payload = {"to": user_id, "messages": [{"type": "text", "text": message_text}]}
-    try: requests.post(url, headers=headers, json=payload)
-    except: pass
+
+    # 💡【問題修正】LINE 單則訊息上限 5000 字，超長自動切段（單次 push 最多 5 則）
+    chunks = [message_text[i:i+4900] for i in range(0, len(message_text), 4900)][:5]
+    payload = {"to": user_id, "messages": [{"type": "text", "text": c} for c in chunks]}
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=15)
+        if resp.status_code != 200:
+            print(f"❌ LINE 推播失敗: HTTP {resp.status_code} | {resp.text[:200]}")
+    except Exception as e:
+        print(f"❌ LINE 推播異常: {e}")
 
 # =========================================================================
 # 🚀 核心控制台
 # =========================================================================
 def main():
-    today = datetime.datetime.now()
-    is_monthly_check = (today.day == 1)
+    # 💡【問題修正】全程序統一使用台灣時間，且 is_monthly_check 只算一次往下傳
+    taiwan_time = now_taiwan()
+    is_monthly_check = (taiwan_time.day == 1)
 
     baseline_brain = {}
     if os.path.exists(BASELINE_FILE):
         try:
             with open(BASELINE_FILE, "r", encoding="utf-8") as f: baseline_brain = json.load(f)
-        except: pass
+        except Exception as e:
+            print(f"⚠️ 歷史基準檔讀取失敗: {e}")
 
     if not baseline_brain or is_monthly_check:
         try: baseline_brain = update_historical_baseline()
@@ -634,12 +734,15 @@ def main():
         if is_monthly_check: tickers.append("^W5000")
         shared_df = yf.download(tickers, period="50d", progress=False)
         if shared_df is None or shared_df.empty or 'Close' not in shared_df: shared_df = None
-    except: shared_df = None
+    except Exception as e:
+        print(f"⚠️ 共享行情下載失敗，各指標將自行補抓: {e}")
+        shared_df = None
 
-    risk_report = get_risk_control_report(shared_df, baseline_brain)
+    risk_report = get_risk_control_report(shared_df, baseline_brain, taiwan_time, is_monthly_check)
     rebalance_report = get_rebalance_report(shared_df)
-    
+
     combined_report = f"{risk_report}\n\n═══════════════════════════\n\n{rebalance_report}"
+    print(combined_report)  # 留在 Actions log 供除錯比對
     send_line_message(combined_report)
 
 if __name__ == "__main__":
