@@ -42,6 +42,17 @@ def get_trend_arrow(series):
     elif current < prev: return "🔻"
     return "➡️"
 
+def get_series_last_date(series):
+    """💡【v3 新增】取序列最後一筆資料的日期，供時效檢查。
+    相容 yfinance 的 Timestamp 索引與 FRED 備援的字串日期索引。"""
+    try:
+        idx = series.index[-1]
+        if hasattr(idx, 'date'):
+            return idx.date()
+        return datetime.datetime.strptime(str(idx), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
 def yf_close_series(ticker, period):
     """單一 ticker 收盤序列下載。
     💡【問題修正】新版 yfinance 單一 ticker 也回傳 MultiIndex 欄位，
@@ -286,6 +297,17 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
 
     close_df = df.get('Close') if df is not None and hasattr(df, 'get') else None
 
+    # 💡【v3 新增】資料時效檢查：yfinance 日線尾端可能過期（實測曾落後1-2個交易日），
+    # 每個行情序列都記錄最後資料日，超過3天未更新就在推播中明確警示
+    stale_notes = []
+    def check_freshness(name, series):
+        if series is None: return
+        d = get_series_last_date(series)
+        if d is None: return
+        print(f"📅 {name} 最後資料日: {d.strftime('%m-%d')}")
+        if (taiwan_time.date() - d).days > 3:
+            stale_notes.append(f"- {name}：資料停留在 {d.strftime('%m-%d')}")
+
     def shared_or_fetch(ticker, period="50d"):
         """優先用共享下載結果，缺漏時單獨補抓"""
         try:
@@ -309,6 +331,7 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         if vix_series is not None:
             print("📌 VIX 已改用 FRED VIXCLS 備援")
     if vix_series is not None:
+        check_freshness("VIX", vix_series)
         data['vix'] = float(vix_series.iloc[-1])
         data['vix_arrow'] = get_trend_arrow(vix_series)
     else:
@@ -368,6 +391,7 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     # 💡 hy_momentum：實為 HYG 近30日「價格變化率」，並非真正的 OAS 利差（舊名 hy_oas 易誤導）
     hyg_series = shared_or_fetch("HYG", "50d")
     if hyg_series is not None and len(hyg_series) >= 30:
+        check_freshness("高收益債HYG", hyg_series)
         data['hy_momentum'] = round(((hyg_series.iloc[-1] - hyg_series.iloc[-30]) / hyg_series.iloc[-30]) * 100, 2)
         data['hy_arrow'] = get_trend_arrow(hyg_series)
     else:
@@ -381,6 +405,7 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         if twd_series is not None:
             print("📌 台幣匯率已改用 FRED DEXTAUS 備援")
     if twd_series is not None and len(twd_series) >= 30:
+        check_freshness("台幣匯率", twd_series)
         current_twd = float(twd_series.iloc[-1])
         ma_30_twd = twd_series.iloc[-30:].mean()
         data['twd_fx'] = current_twd
@@ -391,6 +416,7 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
 
     twii_series = shared_or_fetch("^TWII", "50d")
     if twii_series is not None and len(twii_series) >= 20:
+        check_freshness("台股指數", twii_series)
         current_twii = twii_series.iloc[-1]
         ma_20 = twii_series.iloc[-20:].mean()
         data['tw_bias'] = round(((current_twii - ma_20) / ma_20) * 100, 2)
@@ -624,6 +650,14 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         f"• 台股20日乖離 : {tw_txt} | 風險: {tw_l}\n"
     )
 
+    # 💡【v3】資料時效警示：行情停留超過3天，燈號與乖離計算的可信度下降
+    if stale_notes:
+        report += (
+            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+            f"⚠️ 【資料時效警示】以下行情逾3天未更新，今日燈號僅供參考\n"
+            + "\n".join(stale_notes) + "\n"
+        )
+
     if is_monthly_check:
         p_cape = get_percentile(data['shiller_cape'], baseline_brain, "shiller_cape") if data.get('shiller_cape') is not None else "暫無歷史基準"
         p_bft = get_percentile(data['buffett_indicator'], baseline_brain, "buffett_indicator") if data.get('buffett_indicator') is not None else "暫無歷史基準"
@@ -668,15 +702,37 @@ def get_rebalance_report(df):
     close_df = df.get('Close') if df is not None and hasattr(df, 'get') else None
 
     def safe_get_price_v3(close_df, ticker):
+        # 💡【v3 修正】即時報價優先。實測 yfinance 日線尾端會過期
+        # （00713 曾顯示前一交易日昨收 60.5，當日實收 61.0），
+        # fast_info 的 last_price 才是最接近現價的報價，日線 bar 降為備援。
+        try:
+            fi = yf.Ticker(ticker).fast_info
+            lp = None
+            for key in ('last_price', 'lastPrice', 'regular_market_price'):
+                try:
+                    lp = fi[key] if hasattr(fi, '__getitem__') else getattr(fi, key, None)
+                except Exception:
+                    lp = getattr(fi, key, None)
+                if lp: break
+            if lp and float(lp) > 0:
+                return float(lp)
+        except Exception as e:
+            print(f"⚠️ {ticker} fast_info 即時報價失敗，退回日線: {e}")
         try:
             if close_df is not None and hasattr(close_df, 'columns') and ticker in close_df.columns:
                 series = close_df[ticker].dropna()
-                if not series.empty: return float(series.iloc[-1])
+                if not series.empty:
+                    d = get_series_last_date(series)
+                    print(f"📅 {ticker} 使用日線備援，資料日: {d.strftime('%m-%d') if d else '?'}")
+                    return float(series.iloc[-1])
         except Exception as e:
             print(f"⚠️ 共享數據取 {ticker} 價格失敗: {e}")
         try:
             fallback = yf.Ticker(ticker).history(period="15d")['Close'].dropna()
-            if not fallback.empty: return float(fallback.iloc[-1])
+            if not fallback.empty:
+                d = get_series_last_date(fallback)
+                print(f"📅 {ticker} 使用單獨日線備援，資料日: {d.strftime('%m-%d') if d else '?'}")
+                return float(fallback.iloc[-1])
         except Exception as e:
             print(f"❌ {ticker} 價格補抓失敗: {e}")
         return None
@@ -685,11 +741,6 @@ def get_rebalance_report(df):
     p_smh = safe_get_price_v3(close_df, 'SMH')
     usd_to_twd = safe_get_price_v3(close_df, 'TWD=X') or 32.5
     p_00713 = safe_get_price_v3(close_df, '00713.TW')
-    if p_00713 is None:
-        try: p_00713 = float(yf.Ticker("00713.TW").fast_info.get('last_price'))
-        except Exception as e:
-            print(f"❌ 00713 fast_info 補抓失敗: {e}")
-            p_00713 = None
 
     us_market_status = "正常交易 ✅" if p_voo and p_smh else "休市 💤"
 
