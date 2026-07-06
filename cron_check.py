@@ -20,18 +20,18 @@ RISK_HISTORY_FILE = "risk_history.json"
 CONFIG_PATH = "config.json"
 
 # ⚠️【需人工年度維護】S&P500 近四季 EPS，僅作為 SPY info 抓不到 PE 時的備援分母
-#    最後更新：2026-07（請每半年檢查一次，過期會讓備援 PE 系統性失真）
-SP500_EPS_TTM = 238.5
+#    最後更新：2026-07（由主任親自校正至 2026 年最新盈餘基準 280.0）
+SP500_EPS_TTM = 280.0
 
 DEFAULT_VIX_P = [9.8, 10.5, 11.1, 11.4, 11.8, 12.1, 12.3, 12.5, 12.7, 12.9, 13.1, 13.3, 13.4, 13.6, 13.7, 13.9, 14.0, 14.2, 14.3, 14.5, 14.6, 14.7, 14.9, 15.0, 15.1, 15.3, 15.4, 15.5, 15.7, 15.8, 15.9, 16.1, 16.2, 16.4, 16.5, 16.7, 16.8, 17.0, 17.1, 17.3, 17.4, 17.6, 17.7, 17.9, 18.1, 18.2, 18.4, 18.6, 18.8, 19.0, 19.2, 19.4, 19.6, 19.8, 20.0, 20.3, 20.5, 20.8, 21.1, 21.3, 21.6, 21.9, 22.2, 22.6, 22.9, 23.3, 23.7, 24.1, 24.6, 25.1, 25.6, 26.1, 26.6, 27.2, 27.8, 28.5, 29.2, 30.0, 31.0, 31.9, 32.9, 34.0, 35.3, 36.8, 38.2, 39.8, 41.5, 43.1, 45.0, 47.1, 49.9, 53.0, 56.4, 60.1, 64.3, 69.1, 73.6, 78.4, 82.6, 85.0]
 DEFAULT_SPREAD_P = [-90.0, -82.0, -75.0, -70.0, -65.0, -61.0, -58.0, -54.0, -51.0, -48.0, -45.0, -42.0, -39.0, -37.0, -34.0, -32.0, -29.0, -27.0, -24.0, -22.0, -19.0, -17.0, -15.0, -12.0, -10.0, -8.0, -5.0, -3.0, -1.0, 1.0, 4.0, 6.0, 9.0, 11.0, 14.0, 16.0, 19.0, 22.0, 24.0, 27.0, 30.0, 33.0, 35.0, 38.0, 41.0, 44.0, 47.0, 50.0, 53.0, 56.0, 59.0, 62.0, 65.0, 68.0, 71.0, 74.0, 78.0, 81.0, 84.0, 87.0, 91.0, 94.0, 98.0, 102.0, 105.0, 110.0, 114.0, 118.0, 122.0, 126.0, 131.0, 136.0, 140.0, 145.0, 150.0, 155.0, 161.0, 166.0, 172.0, 178.0, 184.0, 191.0, 198.0, 206.0, 214.0, 222.0, 230.0, 240.0, 249.0, 258.0, 267.0, 276.0, 285.0, 294.0, 303.0, 312.0, 321.0, 330.0, 340.0, 350.0]
 DEFAULT_BIAS_P = [-9.5, -8.2, -7.1, -6.3, -5.7, -5.2, -4.8, -4.4, -4.1, -3.8, -3.5, -3.3, -3.1, -2.9, -2.7, -2.5, -2.3, -2.1, -2.0, -1.8, -1.7, -1.6, -1.4, -1.3, -1.2, -1.1, -1.0, -0.9, -0.8, -0.7, -0.6, -0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.9, 3.0, 3.1, 3.2, 3.3, 3.5, 3.6, 3.7, 3.9, 4.0, 4.2, 4.3, 4.5, 4.6, 4.8, 5.0, 5.2, 5.4, 5.6, 5.8, 6.0, 6.2, 6.5, 6.7, 7.0, 7.3, 7.7, 8.1, 8.5, 9.0, 9.5, 10.2, 11.0, 11.9, 13.1, 14.5]
+DEFAULT_CAPE_P = [10.0, 12.0, 14.0, 15.0, 15.5, 16.0, 16.5, 17.0, 17.5, 18.0, 18.2, 18.5, 18.8, 19.0, 19.2, 19.5, 19.8, 20.0, 20.2, 20.5, 20.8, 21.0, 21.2, 21.5, 21.8, 22.0, 22.2, 22.5, 22.8, 23.0, 23.2, 23.5, 23.8, 24.0, 24.2, 24.5, 24.8, 25.0, 25.2, 25.5, 25.8, 26.0, 26.2, 26.5, 26.8, 27.0, 27.2, 27.5, 27.8, 28.0, 28.2, 28.5, 28.8, 29.0, 29.2, 29.5, 29.8, 30.0, 30.3, 30.6, 31.0, 31.3, 31.6, 32.0, 32.3, 32.6, 33.0, 33.3, 33.6, 34.0, 34.4, 34.8, 35.2, 35.6, 36.0, 36.5, 37.0, 37.5, 38.0, 38.5, 39.0, 39.5, 40.0, 40.5, 41.0, 41.5, 42.0, 42.6, 43.2, 43.8, 44.5, 45.2, 46.0, 47.0, 48.0, 49.2, 50.5, 52.0, 54.0, 56.0]
 
 # =========================================================================
 # 🛠️ 共通工具函式與大腦核心
 # =========================================================================
 def now_taiwan():
-    """全系統唯一時間來源：不論 runner 在哪個時區都正確"""
     return datetime.datetime.now(TW_TZ)
 
 def get_trend_arrow(series):
@@ -210,7 +210,6 @@ def update_historical_baseline():
     else:
         baseline_data["tw_bias"] = None
 
-    # 席勒 CAPE：使用真實歷史月度序列
     cape_hist = fetch_shiller_cape_history()
     baseline_data["shiller_cape"] = calculate_metrics_summary(cape_hist) if cape_hist else None
 
@@ -242,6 +241,7 @@ def get_percentile(value, p_dict, key_name):
         if key_name == "vix": p_list = DEFAULT_VIX_P
         elif key_name == "yield_spread": p_list = DEFAULT_SPREAD_P
         elif key_name == "tw_bias": p_list = DEFAULT_BIAS_P
+        elif key_name == "shiller_cape": p_list = DEFAULT_CAPE_P
         else: return "暫無歷史基準"
     for i, p_val in enumerate(p_list):
         if value <= p_val: return f"{i + 1}%"
@@ -303,7 +303,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
             return None
 
     def load_persisted_value(value_key, date_key, max_age_days):
-        """💡【方案B】讀取 config.json 中持久化的長檢指標值，超過新鮮度窗口視為過期"""
         val = config_data.get(value_key)
         d_str = config_data.get(date_key)
         if val is None or d_str is None: return None
@@ -411,11 +410,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     else:
         data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
 
-    # =========================================================================
-    # 💡【方案B核心】巴菲特指標升級為「每日計算」
-    # ^W5000 已納入每日共享下載清單，抓到就當日計算並持久化；
-    # 抓不到則讀取 config 中 45 天內的持久化值，確保全年參與計分
-    # =========================================================================
     w5000_series = shared_or_fetch("^W5000", "10d")
     if w5000_series is not None:
         data['buffett_indicator'] = round(BASELINE_BUFFETT_PCT * (float(w5000_series.iloc[-1]) / BASELINE_W5000), 1)
@@ -439,7 +433,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     auto_val, auto_date = None, None
 
     def recession_data_is_fresh(date_str):
-        """FRED 衰退率（RECPROUSM156N）發布落後約兩個月，75 天內視為最新"""
         try:
             dt_prob = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
             return (taiwan_time.date() - dt_prob).days <= 75
@@ -447,7 +440,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
             return False
 
     def persist_cape(val):
-        """💡【方案B】CAPE 抓到就持久化，供之後 45 天每日計分使用"""
         safe_save_config_field("shiller_cape_manual", val)
         safe_save_config_field("shiller_cape_last_updated", today_str)
 
@@ -487,7 +479,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
                 data['shiller_cape'] = load_persisted_value("shiller_cape_manual", "shiller_cape_last_updated", 45)
                 still_tracking_notifications.append("- 席勒CAPE：持續嘗試補抓中 🔄")
         else:
-            # 💡【方案B】平日直接使用持久化值參與計分，不再歸零
             data['shiller_cape'] = load_persisted_value("shiller_cape_manual", "shiller_cape_last_updated", 45)
 
         if pending_status.get("recession_prob", False):
@@ -511,7 +502,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         else:
             data['recession_prob'] = config_data.get("recession_probability_manual", None)
 
-    # 衰退率計分前的過期保護：FRED 資料日期超過 120 天不再參與計分（顯示照舊）
     recession_for_scoring = data.get('recession_prob')
     rec_date_str = config_data.get("recession_probability_last_updated")
     if recession_for_scoring is not None and rec_date_str:
@@ -526,7 +516,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     # =========================================================================
     # 🚦 每日指標明確 if/else 燈號與計分邏輯
     # =========================================================================
-    # 1. VIX 指標
     if data.get('vix') is not None:
         vix_l = "🔴" if data['vix'] > 30 else ("🟡" if data['vix'] > 20 else "🟢")
         vix_score = 2 if data['vix'] > 30 else (1 if data['vix'] > 20 else 0)
@@ -534,7 +523,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         vix_l = "⚪"
         vix_score = 0
 
-    # 2. 本益比指標
     if data.get('pe_ratio') is not None:
         pe_l = "🔴" if data['pe_ratio'] > 30 else ("🟡" if data['pe_ratio'] > 26 else "🟢")
         pe_score = 2 if data['pe_ratio'] > 30 else (1 if data['pe_ratio'] > 26 else 0)
@@ -542,7 +530,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         pe_l = "⚪"
         pe_score = 0
 
-    # 3. 美債利差指標
     if data.get('yield_spread_bps') is not None:
         yield_l = "🔴" if data['yield_spread_bps'] < -50 else ("🟡" if data['yield_spread_bps'] < 0 else "🟢")
         yield_score = 2 if data['yield_spread_bps'] < -50 else (1 if data['yield_spread_bps'] < 0 else 0)
@@ -550,7 +537,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         yield_l = "⚪"
         yield_score = 0
 
-    # 4. 高收益債動能
     if data.get('hy_momentum') is not None:
         hy_l = "🔴" if data['hy_momentum'] < -3.5 else ("🟡" if data['hy_momentum'] < -1.5 else "🟢")
         hy_score = 2 if data['hy_momentum'] < -3.5 else (1 if data['hy_momentum'] < -1.5 else 0)
@@ -558,7 +544,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         hy_l = "⚪"
         hy_score = 0
 
-    # 5. 台幣匯率偏離
     if data.get('twd_bias_pct') is not None:
         twd_l = "🔴" if data['twd_bias_pct'] > 1.5 else ("🟡" if data['twd_bias_pct'] > 0.5 else "🟢")
         twd_score = 2 if data['twd_bias_pct'] > 1.5 else (1 if data['twd_bias_pct'] > 0.5 else 0)
@@ -566,7 +551,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         twd_l = "⚪"
         twd_score = 0
 
-    # 6. 台股20日乖離
     if data.get('tw_bias') is not None:
         tw_l = "🔴" if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else ("🟡" if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else "🟢")
         tw_score = 2 if (data['tw_bias'] > 6.0 or data['tw_bias'] < -8.0) else (1 if (data['tw_bias'] > 3.5 or data['tw_bias'] < -5.0) else 0)
@@ -576,28 +560,20 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
 
     total_score = vix_score + pe_score + yield_score + hy_score + twd_score + tw_score
 
-    # =========================================================================
-    # 💡【方案B：全天候長檢計分】
-    # 三大長檢指標（CAPE / 巴菲特 / 衰退率）只要有有效數值——不論是當日抓取
-    # 還是 config 持久化且未過期——每天一律計分，門檻隨計分項數動態調整。
-    # 三項齊備時門檻恆為 15/10/5，燈號口徑全年一致，徹底消除月檢日/補獲日跳變。
-    # =========================================================================
     n_monthly_scored = 0
-
+    
     if data.get('shiller_cape') is not None:
         total_score += 0 if data['shiller_cape'] < 25 else (1 if data['shiller_cape'] < 32 else (2 if data['shiller_cape'] < 40 else 3))
         n_monthly_scored += 1
-
+        
     if data.get('buffett_indicator') is not None:
         total_score += 0 if data['buffett_indicator'] < 100 else (1 if data['buffett_indicator'] < 150 else (2 if data['buffett_indicator'] < 200 else 3))
         n_monthly_scored += 1
-
+            
     if recession_for_scoring is not None:
         total_score += 0 if recession_for_scoring < 15 else (1 if recession_for_scoring < 30 else (2 if recession_for_scoring < 50 else 3))
         n_monthly_scored += 1
 
-    # 門檻判定：日常基準 (9/6/3)，每多一個成功計分的長檢指標，門檻按比例上調
-    # n=3 → 15/10/5（原月檢設計）；n=0 → 9/6/3
     red_threshold = 9 + 2 * n_monthly_scored
     orange_threshold = 6 + round(4 * n_monthly_scored / 3)
     yellow_threshold = 3 + round(2 * n_monthly_scored / 3)
@@ -668,7 +644,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         f"• 台股20日乖離 : {tw_txt} | 風險: {tw_l}\n"
     )
 
-    # 💡【方案B】每日長檢計分透明行：讓門檻與總分的構成有跡可循
     if not is_monthly_check and n_monthly_scored > 0:
         lc_parts = []
         if data.get('shiller_cape') is not None: lc_parts.append(f"CAPE {data['shiller_cape']:.1f}倍")
@@ -861,7 +836,6 @@ def main():
 
     shared_df = None
     try:
-        # 💡【方案B】^W5000 納入每日下載，巴菲特指標升級為每日計算
         tickers = ["^VIX", "SPY", "^GSPC", "HYG", "TWD=X", "^TWII", "00713.TW", "VOO", "SMH", "^W5000"]
         shared_df = yf.download(tickers, period="50d", progress=False)
         if shared_df is None or shared_df.empty or 'Close' not in shared_df: shared_df = None
