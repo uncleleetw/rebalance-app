@@ -43,8 +43,6 @@ def get_trend_arrow(series):
     return "➡️"
 
 def get_series_last_date(series):
-    """💡【v3 新增】取序列最後一筆資料的日期，供時效檢查。
-    相容 yfinance 的 Timestamp 索引與 FRED 備援的字串日期索引。"""
     try:
         idx = series.index[-1]
         if hasattr(idx, 'date'):
@@ -54,10 +52,6 @@ def get_series_last_date(series):
         return None
 
 def yf_close_series(ticker, period):
-    """單一 ticker 收盤序列下載。
-    💡【問題修正】新版 yfinance 單一 ticker 也回傳 MultiIndex 欄位，
-    df['Close'] 會是 DataFrame 而非 Series，舊寫法直接 .tolist() 會炸掉並被
-    bare except 靜默吞掉，導致歷史基準全部建不起來。此處統一 squeeze 處理。"""
     try:
         df = yf.download(ticker, period=period, progress=False)
         if df is None or df.empty or 'Close' not in df:
@@ -72,9 +66,6 @@ def yf_close_series(ticker, period):
         return None
 
 def fred_series(series_id, tail_n=60):
-    """💡【v2 新增】FRED 通用序列備援。您的環境中 FRED 連線穩定，
-    當 yfinance 整層斷線時（Yahoo 封鎖/版本問題），VIX、S&P500、台幣匯率
-    可改由 FRED 取得，避免風控全面失明。回傳 pandas Series（已剔除缺值）。"""
     url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
     try:
         import io
@@ -91,7 +82,6 @@ def fred_series(series_id, tail_n=60):
         return None
 
 def safe_save_config_field(field_key, field_value, sub_key=None):
-    """安全修改 config.json 單一欄位之工具函式，絕不破壞持股等其餘數據"""
     try:
         current_config = {}
         if os.path.exists(CONFIG_PATH):
@@ -149,8 +139,6 @@ def fetch_shiller_cape_real():
         return None
 
 def fetch_shiller_cape_history(max_months=180):
-    """💡【問題修正】抓取 multpl 月度歷史表格建立「真實」CAPE 歷史序列。
-    舊版用 [當前值]*150 建假序列，百分位永遠顯示 1%，具誤導性。"""
     url = "https://www.multpl.com/shiller-pe/table/by-month"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -199,7 +187,6 @@ def update_historical_baseline():
         url_2y = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS2"
         df_10y = pd.read_csv(url_10y, na_values=".")
         df_2y = pd.read_csv(url_2y, na_values=".")
-        # FRED 欄位名稱有時是 DATE、有時是 observation_date，統一取第一欄為日期
         df_10y.columns = ["DATE", "DGS10"]
         df_2y.columns = ["DATE", "DGS2"]
         df_fred = pd.merge(df_10y, df_2y, on="DATE").dropna()
@@ -223,12 +210,10 @@ def update_historical_baseline():
     else:
         baseline_data["tw_bias"] = None
 
-    # 席勒 CAPE：改用真實歷史月度序列
+    # 席勒 CAPE：使用真實歷史月度序列
     cape_hist = fetch_shiller_cape_history()
     baseline_data["shiller_cape"] = calculate_metrics_summary(cape_hist) if cape_hist else None
 
-    # ⚠️【已知限制】巴菲特指標以固定比例縮放 W5000 回推歷史，隱含假設 GDP 不變，
-    #    會使過去指標值被高估、當前百分位被低估。此百分位僅供粗略參考，勿當精確值。
     w5000_close = yf_close_series("^W5000", "15y")
     if w5000_close is not None:
         try:
@@ -282,9 +267,6 @@ def get_situation_assessment(data, vix_l, yield_l, hy_l, twd_l, tw_l, pe_l):
 # 🧠 第一大核心：總經加權風控塔台
 # =========================================================================
 def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
-    """💡【問題修正】taiwan_time 與 is_monthly_check 由 main() 統一計算後傳入，
-    確保「下載清單」「歷史基準更新」「報告門檻」三處對『今天是不是1號』的認知
-    永遠一致。舊版兩處各自判定，UTC runner 上台灣時間 1 號凌晨會出現分裂。"""
     today_str = taiwan_time.strftime("%Y-%m-%d")
     data = {}
 
@@ -297,8 +279,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
 
     close_df = df.get('Close') if df is not None and hasattr(df, 'get') else None
 
-    # 💡【v3 新增】資料時效檢查：yfinance 日線尾端可能過期（實測曾落後1-2個交易日），
-    # 每個行情序列都記錄最後資料日，超過3天未更新就在推播中明確警示
     stale_notes = []
     def check_freshness(name, series):
         if series is None: return
@@ -309,7 +289,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
             stale_notes.append(f"- {name}：資料停留在 {d.strftime('%m-%d')}")
 
     def shared_or_fetch(ticker, period="50d"):
-        """優先用共享下載結果，缺漏時單獨補抓"""
         try:
             if close_df is not None and hasattr(close_df, 'columns') and ticker in close_df.columns:
                 s = close_df[ticker].dropna()
@@ -323,10 +302,22 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
             print(f"❌ {ticker} 單獨補抓失敗: {e}")
             return None
 
+    def load_persisted_value(value_key, date_key, max_age_days):
+        """💡【方案B】讀取 config.json 中持久化的長檢指標值，超過新鮮度窗口視為過期"""
+        val = config_data.get(value_key)
+        d_str = config_data.get(date_key)
+        if val is None or d_str is None: return None
+        try:
+            d = datetime.datetime.strptime(d_str, "%Y-%m-%d").date()
+            if (taiwan_time.date() - d).days <= max_age_days:
+                return float(val)
+        except Exception:
+            pass
+        return None
+
     # --- 1. 每日核心量化 6 大基礎資料下載 ---
     vix_series = shared_or_fetch("^VIX", "10d")
     if vix_series is None:
-        # 💡【v2 備援】Yahoo 斷線時改用 FRED 的 VIX 收盤序列（VIXCLS）
         vix_series = fred_series("VIXCLS", 10)
         if vix_series is not None:
             print("📌 VIX 已改用 FRED VIXCLS 備援")
@@ -346,7 +337,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         print(f"⚠️ SPY PE 主路徑失敗，退回 EPS 常數備援: {e}")
         sp500_close = shared_or_fetch("^GSPC", "10d")
         if sp500_close is None:
-            # 💡【v2 備援】Yahoo 斷線時改用 FRED 的 S&P500 指數序列
             sp500_close = fred_series("SP500", 10)
             if sp500_close is not None:
                 print("📌 S&P500 已改用 FRED SP500 備援")
@@ -388,7 +378,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     else:
         data['yield_spread_bps'], data['yield_arrow'] = None, "⏳"
 
-    # 💡 hy_momentum：實為 HYG 近30日「價格變化率」，並非真正的 OAS 利差（舊名 hy_oas 易誤導）
     hyg_series = shared_or_fetch("HYG", "50d")
     if hyg_series is not None and len(hyg_series) >= 30:
         check_freshness("高收益債HYG", hyg_series)
@@ -399,8 +388,6 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
 
     twd_series = shared_or_fetch("TWD=X", "50d")
     if twd_series is None or len(twd_series) < 30:
-        # 💡【v2 備援】FRED DEXTAUS 同為「1美元兌台幣」報價，方向與 TWD=X 一致，
-        # 可直接沿用相同的 30 日均線偏離計算
         twd_series = fred_series("DEXTAUS", 60)
         if twd_series is not None:
             print("📌 台幣匯率已改用 FRED DEXTAUS 備援")
@@ -425,6 +412,21 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         data['tw_bias'], data['tw_bias_arrow'] = None, "⏳"
 
     # =========================================================================
+    # 💡【方案B核心】巴菲特指標升級為「每日計算」
+    # ^W5000 已納入每日共享下載清單，抓到就當日計算並持久化；
+    # 抓不到則讀取 config 中 45 天內的持久化值，確保全年參與計分
+    # =========================================================================
+    w5000_series = shared_or_fetch("^W5000", "10d")
+    if w5000_series is not None:
+        data['buffett_indicator'] = round(BASELINE_BUFFETT_PCT * (float(w5000_series.iloc[-1]) / BASELINE_W5000), 1)
+        safe_save_config_field("buffett_indicator_manual", data['buffett_indicator'])
+        safe_save_config_field("buffett_indicator_last_updated", today_str)
+    else:
+        data['buffett_indicator'] = load_persisted_value("buffett_indicator_manual", "buffett_indicator_last_updated", 45)
+        if data['buffett_indicator'] is not None:
+            print("📌 巴菲特指標使用 config 持久化值（45天內有效）")
+
+    # =========================================================================
     # ⚙️ 核心調度：追蹤機制狀態初始化與判定邏輯
     # =========================================================================
     pending_status = config_data.get("pending_monthly_checks", {"shiller_cape": False, "recession_prob": False})
@@ -437,25 +439,27 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     auto_val, auto_date = None, None
 
     def recession_data_is_fresh(date_str):
-        """💡【v2 修正】FRED 衰退率（RECPROUSM156N）發布本身落後約兩個月，
-        60 天門檻會讓它永遠處於「追蹤中」，放寬至 75 天"""
+        """FRED 衰退率（RECPROUSM156N）發布落後約兩個月，75 天內視為最新"""
         try:
             dt_prob = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
             return (taiwan_time.date() - dt_prob).days <= 75
         except Exception:
             return False
 
+    def persist_cape(val):
+        """💡【方案B】CAPE 抓到就持久化，供之後 45 天每日計分使用"""
+        safe_save_config_field("shiller_cape_manual", val)
+        safe_save_config_field("shiller_cape_last_updated", today_str)
+
     # --- 執行常態月度長檢 (1號當天) ---
     if is_monthly_check:
         cape_val = fetch_shiller_cape_real()
         data['shiller_cape'] = cape_val
         pending_status["shiller_cape"] = (cape_val is None)
-
-        w5000_series = shared_or_fetch("^W5000", "10d")
-        if w5000_series is not None:
-            data['buffett_indicator'] = round(BASELINE_BUFFETT_PCT * (float(w5000_series.iloc[-1]) / BASELINE_W5000), 1)
+        if cape_val is not None:
+            persist_cape(cape_val)
         else:
-            data['buffett_indicator'] = None
+            data['shiller_cape'] = load_persisted_value("shiller_cape_manual", "shiller_cape_last_updated", 45)
 
         auto_val, auto_date = get_recession_prob_from_fred()
         if auto_val is not None:
@@ -475,14 +479,16 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
             cape_retry = fetch_shiller_cape_real()
             if cape_retry is not None:
                 data['shiller_cape'] = cape_retry
+                persist_cape(cape_retry)
                 pending_status["shiller_cape"] = False
                 safe_save_config_field("pending_monthly_checks", pending_status)
                 success_catch_notifications.append(f"- 席勒CAPE已補獲：{cape_retry:.1f}倍（補獲於{taiwan_time.strftime('%m-%d')}）✅")
             else:
-                data['shiller_cape'] = None
+                data['shiller_cape'] = load_persisted_value("shiller_cape_manual", "shiller_cape_last_updated", 45)
                 still_tracking_notifications.append("- 席勒CAPE：持續嘗試補抓中 🔄")
         else:
-            data['shiller_cape'] = None
+            # 💡【方案B】平日直接使用持久化值參與計分，不再歸零
+            data['shiller_cape'] = load_persisted_value("shiller_cape_manual", "shiller_cape_last_updated", 45)
 
         if pending_status.get("recession_prob", False):
             auto_val, auto_date = get_recession_prob_from_fred()
@@ -504,6 +510,18 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
                 still_tracking_notifications.append("- 聯準會衰退率：等待FRED釋出新月份數據 🔄")
         else:
             data['recession_prob'] = config_data.get("recession_probability_manual", None)
+
+    # 衰退率計分前的過期保護：FRED 資料日期超過 120 天不再參與計分（顯示照舊）
+    recession_for_scoring = data.get('recession_prob')
+    rec_date_str = config_data.get("recession_probability_last_updated")
+    if recession_for_scoring is not None and rec_date_str:
+        try:
+            rec_d = datetime.datetime.strptime(rec_date_str, "%Y-%m-%d").date()
+            if (taiwan_time.date() - rec_d).days > 120:
+                print("⚠️ 衰退率資料超過120天，本日不參與計分")
+                recession_for_scoring = None
+        except Exception:
+            pass
 
     # =========================================================================
     # 🚦 每日指標明確 if/else 燈號與計分邏輯
@@ -556,26 +574,30 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         tw_l = "⚪"
         tw_score = 0
 
-    # 基礎每日權重總體計分
     total_score = vix_score + pe_score + yield_score + hy_score + twd_score + tw_score
 
-    # 月度長檢指標額外計分 (僅在1號觸發)
-    # 💡【問題修正】記錄「實際成功計分」的月度指標數，門檻隨之動態調整，
-    #    避免月檢當天指標抓失敗時，分母變小但門檻沒降 → 假綠燈
+    # =========================================================================
+    # 💡【方案B：全天候長檢計分】
+    # 三大長檢指標（CAPE / 巴菲特 / 衰退率）只要有有效數值——不論是當日抓取
+    # 還是 config 持久化且未過期——每天一律計分，門檻隨計分項數動態調整。
+    # 三項齊備時門檻恆為 15/10/5，燈號口徑全年一致，徹底消除月檢日/補獲日跳變。
+    # =========================================================================
     n_monthly_scored = 0
-    if is_monthly_check:
-        if data.get('shiller_cape') is not None:
-            total_score += 0 if data['shiller_cape'] < 25 else (1 if data['shiller_cape'] < 32 else (2 if data['shiller_cape'] < 40 else 3))
-            n_monthly_scored += 1
-        if data.get('buffett_indicator') is not None:
-            total_score += 0 if data['buffett_indicator'] < 100 else (1 if data['buffett_indicator'] < 150 else (2 if data['buffett_indicator'] < 200 else 3))
-            n_monthly_scored += 1
-        if data.get('recession_prob') is not None:
-            total_score += 0 if data['recession_prob'] < 15 else (1 if data['recession_prob'] < 30 else (2 if data['recession_prob'] < 50 else 3))
-            n_monthly_scored += 1
 
-    # 門檻判定：日常基準 (9/6/3)，每多一個成功計分的月度指標，門檻按比例上調
-    # n=3 時恰為原設計的 15/10/5；n=0（或非月檢日）退回 9/6/3
+    if data.get('shiller_cape') is not None:
+        total_score += 0 if data['shiller_cape'] < 25 else (1 if data['shiller_cape'] < 32 else (2 if data['shiller_cape'] < 40 else 3))
+        n_monthly_scored += 1
+
+    if data.get('buffett_indicator') is not None:
+        total_score += 0 if data['buffett_indicator'] < 100 else (1 if data['buffett_indicator'] < 150 else (2 if data['buffett_indicator'] < 200 else 3))
+        n_monthly_scored += 1
+
+    if recession_for_scoring is not None:
+        total_score += 0 if recession_for_scoring < 15 else (1 if recession_for_scoring < 30 else (2 if recession_for_scoring < 50 else 3))
+        n_monthly_scored += 1
+
+    # 門檻判定：日常基準 (9/6/3)，每多一個成功計分的長檢指標，門檻按比例上調
+    # n=3 → 15/10/5（原月檢設計）；n=0 → 9/6/3
     red_threshold = 9 + 2 * n_monthly_scored
     orange_threshold = 6 + round(4 * n_monthly_scored / 3)
     yellow_threshold = 3 + round(2 * n_monthly_scored / 3)
@@ -589,16 +611,12 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     else:
         status_light = "🟢 【一級安全綠燈】紀律加碼/維持常態"
 
-    # 💡【v2 保險絲】風控最不能犯的錯：把「沒有資料」當成「沒有風險」。
-    # 六個每日指標中若有 3 個以上斷線，計分已失去代表性，
-    # 強制覆蓋為斷線狀態，嚴禁顯示綠燈誘導加碼。
     daily_lights = [vix_l, pe_l, yield_l, hy_l, twd_l, tw_l]
     missing_count = daily_lights.count("⚪")
     data_fuse_tripped = (missing_count >= 3)
     if data_fuse_tripped:
         status_light = f"⚪ 【數據斷線 {missing_count}/6】指標多數無法取得，燈號暫停研判——今日勿依系統加減碼，請查 Actions log"
 
-    # 歷史風險軌跡去重滑動儲存（💡 v2：斷線日分數失真，不寫入、不比較）
     yesterday_score_text = "🔄 啟動"
     if data_fuse_tripped:
         yesterday_score_text = "⚪ 斷線日不記錄"
@@ -650,7 +668,18 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         f"• 台股20日乖離 : {tw_txt} | 風險: {tw_l}\n"
     )
 
-    # 💡【v3】資料時效警示：行情停留超過3天，燈號與乖離計算的可信度下降
+    # 💡【方案B】每日長檢計分透明行：讓門檻與總分的構成有跡可循
+    if not is_monthly_check and n_monthly_scored > 0:
+        lc_parts = []
+        if data.get('shiller_cape') is not None: lc_parts.append(f"CAPE {data['shiller_cape']:.1f}倍")
+        if data.get('buffett_indicator') is not None: lc_parts.append(f"巴菲特 {data['buffett_indicator']:.0f}%")
+        if recession_for_scoring is not None: lc_parts.append(f"衰退率 {recession_for_scoring:.1f}%")
+        report += (
+            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+            f"📐 【長檢計分 {n_monthly_scored}/3】" + " | ".join(lc_parts) + "\n"
+            f"   總分 {total_score}｜門檻 🟡{yellow_threshold} 🟠{orange_threshold} 🔴{red_threshold}\n"
+        )
+
     if stale_notes:
         report += (
             f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
@@ -702,9 +731,6 @@ def get_rebalance_report(df):
     close_df = df.get('Close') if df is not None and hasattr(df, 'get') else None
 
     def safe_get_price_v3(close_df, ticker):
-        # 💡【v3 修正】即時報價優先。實測 yfinance 日線尾端會過期
-        # （00713 曾顯示前一交易日昨收 60.5，當日實收 61.0），
-        # fast_info 的 last_price 才是最接近現價的報價，日線 bar 降為備援。
         try:
             fi = yf.Ticker(ticker).fast_info
             lp = None
@@ -761,8 +787,6 @@ def get_rebalance_report(df):
     p_voo_txt = f"{p_voo:.1f} USD" if p_voo else "休市"
     p_smh_txt = f"{p_smh:.1f} USD" if p_smh else "休市"
 
-    # 💡【v2 防呆】任一持股報價缺失時，市值與偏離百分比都是失真的
-    # （例如全斷線時顯示「NT$ 0 元、偏離 -40%」），直接改為斷線報告
     if not (p_00713 and p_voo and p_smh):
         missing_list = [n for n, p in [("00713", p_00713), ("VOO", p_voo), ("SMH", p_smh)] if not p]
         return (
@@ -808,7 +832,6 @@ def send_line_message(message_text):
     url = "https://api.line.me/v2/bot/message/push"
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
 
-    # 💡【問題修正】LINE 單則訊息上限 5000 字，超長自動切段（單次 push 最多 5 則）
     chunks = [message_text[i:i+4900] for i in range(0, len(message_text), 4900)][:5]
     payload = {"to": user_id, "messages": [{"type": "text", "text": c} for c in chunks]}
     try:
@@ -822,7 +845,6 @@ def send_line_message(message_text):
 # 🚀 核心控制台
 # =========================================================================
 def main():
-    # 💡【問題修正】全程序統一使用台灣時間，且 is_monthly_check 只算一次往下傳
     taiwan_time = now_taiwan()
     is_monthly_check = (taiwan_time.day == 1)
 
@@ -839,8 +861,8 @@ def main():
 
     shared_df = None
     try:
-        tickers = ["^VIX", "SPY", "^GSPC", "HYG", "TWD=X", "^TWII", "00713.TW", "VOO", "SMH"]
-        if is_monthly_check: tickers.append("^W5000")
+        # 💡【方案B】^W5000 納入每日下載，巴菲特指標升級為每日計算
+        tickers = ["^VIX", "SPY", "^GSPC", "HYG", "TWD=X", "^TWII", "00713.TW", "VOO", "SMH", "^W5000"]
         shared_df = yf.download(tickers, period="50d", progress=False)
         if shared_df is None or shared_df.empty or 'Close' not in shared_df: shared_df = None
     except Exception as e:
@@ -851,7 +873,7 @@ def main():
     rebalance_report = get_rebalance_report(shared_df)
 
     combined_report = f"{risk_report}\n\n═══════════════════════════\n\n{rebalance_report}"
-    print(combined_report)  # 留在 Actions log 供除錯比對
+    print(combined_report)
     send_line_message(combined_report)
 
 if __name__ == "__main__":
