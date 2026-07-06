@@ -7,5 +7,7 @@
     "pending_monthly_checks": {
         "shiller_cape": true,
         "recession_prob": false
-    }
+    },
+    "buffett_indicator_manual": 225.2,
+    "buffett_indicator_last_updated": "2026-07-07"
 }
