@@ -1,32 +1,29 @@
 name: Market Risk & Rebalance Check
-
 on:
   schedule:
     # 每天台灣時間早上 7:30 自動執行 (UTC 23:30)
     - cron: '30 23 * * *'
-  workflow_dispatch: # 保留手動點火測試按鈕
+  workflow_dispatch:
 
-# 🚀 關鍵修正【1】：顯式開啟 Actions 的檔案寫入最高權限，否則 git push 必噴 403 錯誤
 permissions:
   contents: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
-
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install yfinance pandas numpy requests
+        pip install -r requirements.txt
 
     - name: Run Check Script
       env:
@@ -38,10 +35,12 @@ jobs:
       run: |
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        
-        # 💡 關鍵修正【2】：指名道姓強迫 Git 追蹤這三個核心 JSON 檔，保證 config.json 狀態完美寫回
-        git add risk_history.json historical_baseline.json config.json || true
-        
-        # 加上 || true 與條件判斷，防範無東西可提交時的報錯中斷
-        git diff --quiet && git diff --staged --quiet || git commit -m "自動同步風控軌跡、歷史百分位基準與 config.json 狀態 [skip ci]"
-        git push || true
+        git add risk_history.json historical_baseline.json config.json
+        # 沒有變更就跳過 commit；有變更則 commit 並推送，推送失敗要真的報錯
+        if ! git diff --staged --quiet; then
+          git commit -m "自動同步風控軌跡、歷史百分位基準與 config.json 狀態 [skip ci]"
+          git pull --rebase origin main
+          git push
+        else
+          echo "狀態檔無變更，跳過提交"
+        fi
