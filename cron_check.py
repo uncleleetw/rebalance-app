@@ -60,6 +60,25 @@ def yf_close_series(ticker, period):
         print(f"❌ {ticker} 下載失敗: {e}")
         return None
 
+def fred_series(series_id, tail_n=60):
+    """💡【v2 新增】FRED 通用序列備援。您的環境中 FRED 連線穩定，
+    當 yfinance 整層斷線時（Yahoo 封鎖/版本問題），VIX、S&P500、台幣匯率
+    可改由 FRED 取得，避免風控全面失明。回傳 pandas Series（已剔除缺值）。"""
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    try:
+        import io
+        response = requests.get(url, timeout=15)
+        if response.status_code != 200:
+            print(f"⚠️ FRED {series_id} 回應異常: HTTP {response.status_code}")
+            return None
+        df = pd.read_csv(io.StringIO(response.text), na_values=".")
+        df.columns = ["DATE", "VAL"]
+        s = pd.Series(pd.to_numeric(df["VAL"]).values, index=df["DATE"]).dropna()
+        return s.tail(tail_n) if not s.empty else None
+    except Exception as e:
+        print(f"❌ FRED {series_id} 抓取異常: {e}")
+        return None
+
 def safe_save_config_field(field_key, field_value, sub_key=None):
     """安全修改 config.json 單一欄位之工具函式，絕不破壞持股等其餘數據"""
     try:
@@ -284,6 +303,11 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
 
     # --- 1. 每日核心量化 6 大基礎資料下載 ---
     vix_series = shared_or_fetch("^VIX", "10d")
+    if vix_series is None:
+        # 💡【v2 備援】Yahoo 斷線時改用 FRED 的 VIX 收盤序列（VIXCLS）
+        vix_series = fred_series("VIXCLS", 10)
+        if vix_series is not None:
+            print("📌 VIX 已改用 FRED VIXCLS 備援")
     if vix_series is not None:
         data['vix'] = float(vix_series.iloc[-1])
         data['vix_arrow'] = get_trend_arrow(vix_series)
@@ -298,6 +322,11 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     except Exception as e:
         print(f"⚠️ SPY PE 主路徑失敗，退回 EPS 常數備援: {e}")
         sp500_close = shared_or_fetch("^GSPC", "10d")
+        if sp500_close is None:
+            # 💡【v2 備援】Yahoo 斷線時改用 FRED 的 S&P500 指數序列
+            sp500_close = fred_series("SP500", 10)
+            if sp500_close is not None:
+                print("📌 S&P500 已改用 FRED SP500 備援")
         if sp500_close is not None:
             data['pe_ratio'] = round(float(sp500_close.iloc[-1]) / SP500_EPS_TTM, 1)
         else:
@@ -345,6 +374,12 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         data['hy_momentum'], data['hy_arrow'] = None, "⏳"
 
     twd_series = shared_or_fetch("TWD=X", "50d")
+    if twd_series is None or len(twd_series) < 30:
+        # 💡【v2 備援】FRED DEXTAUS 同為「1美元兌台幣」報價，方向與 TWD=X 一致，
+        # 可直接沿用相同的 30 日均線偏離計算
+        twd_series = fred_series("DEXTAUS", 60)
+        if twd_series is not None:
+            print("📌 台幣匯率已改用 FRED DEXTAUS 備援")
     if twd_series is not None and len(twd_series) >= 30:
         current_twd = float(twd_series.iloc[-1])
         ma_30_twd = twd_series.iloc[-30:].mean()
@@ -376,10 +411,11 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     auto_val, auto_date = None, None
 
     def recession_data_is_fresh(date_str):
-        """FRED 衰退率資料日期距今 60 天內視為有效（該指標發布本身落後約2個月）"""
+        """💡【v2 修正】FRED 衰退率（RECPROUSM156N）發布本身落後約兩個月，
+        60 天門檻會讓它永遠處於「追蹤中」，放寬至 75 天"""
         try:
             dt_prob = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
-            return (taiwan_time.date() - dt_prob).days <= 60
+            return (taiwan_time.date() - dt_prob).days <= 75
         except Exception:
             return False
 
@@ -527,25 +563,37 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     else:
         status_light = "🟢 【一級安全綠燈】紀律加碼/維持常態"
 
-    # 歷史風險軌跡去重滑動儲存
+    # 💡【v2 保險絲】風控最不能犯的錯：把「沒有資料」當成「沒有風險」。
+    # 六個每日指標中若有 3 個以上斷線，計分已失去代表性，
+    # 強制覆蓋為斷線狀態，嚴禁顯示綠燈誘導加碼。
+    daily_lights = [vix_l, pe_l, yield_l, hy_l, twd_l, tw_l]
+    missing_count = daily_lights.count("⚪")
+    data_fuse_tripped = (missing_count >= 3)
+    if data_fuse_tripped:
+        status_light = f"⚪ 【數據斷線 {missing_count}/6】指標多數無法取得，燈號暫停研判——今日勿依系統加減碼，請查 Actions log"
+
+    # 歷史風險軌跡去重滑動儲存（💡 v2：斷線日分數失真，不寫入、不比較）
     yesterday_score_text = "🔄 啟動"
-    try:
-        rh_data = {"records": []}
-        if os.path.exists(RISK_HISTORY_FILE):
-            with open(RISK_HISTORY_FILE, "r", encoding="utf-8") as f: rh_data = json.load(f)
-        past_records = [r for r in rh_data.get("records", []) if r.get("date") != today_str]
-        if past_records:
-            prev_score = past_records[-1]["total_score"]
-            diff = total_score - prev_score
-            if diff > 0: diff_txt = f"🔺+{diff}"
-            elif diff < 0: diff_txt = f"🔻{diff}"
-            else: diff_txt = "➡️ 持平"
-            yesterday_score_text = f"{prev_score} → {total_score} ({diff_txt})"
-        past_records.append({"date": today_str, "total_score": total_score})
-        rh_data["records"] = past_records[-90:]
-        with open(RISK_HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(rh_data, f, indent=2)
-    except Exception as e:
-        print(f"⚠️ 風險軌跡檔讀寫失敗: {e}")
+    if data_fuse_tripped:
+        yesterday_score_text = "⚪ 斷線日不記錄"
+    else:
+        try:
+            rh_data = {"records": []}
+            if os.path.exists(RISK_HISTORY_FILE):
+                with open(RISK_HISTORY_FILE, "r", encoding="utf-8") as f: rh_data = json.load(f)
+            past_records = [r for r in rh_data.get("records", []) if r.get("date") != today_str]
+            if past_records:
+                prev_score = past_records[-1]["total_score"]
+                diff = total_score - prev_score
+                if diff > 0: diff_txt = f"🔺+{diff}"
+                elif diff < 0: diff_txt = f"🔻{diff}"
+                else: diff_txt = "➡️ 持平"
+                yesterday_score_text = f"{prev_score} → {total_score} ({diff_txt})"
+            past_records.append({"date": today_str, "total_score": total_score})
+            rh_data["records"] = past_records[-90:]
+            with open(RISK_HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(rh_data, f, indent=2)
+        except Exception as e:
+            print(f"⚠️ 風險軌跡檔讀寫失敗: {e}")
 
     situation_msg = get_situation_assessment(data, vix_l, yield_l, hy_l, twd_l, tw_l, pe_l)
 
@@ -661,6 +709,16 @@ def get_rebalance_report(df):
     p_00713_txt = f"{p_00713:.1f} TWD" if p_00713 else "延遲"
     p_voo_txt = f"{p_voo:.1f} USD" if p_voo else "休市"
     p_smh_txt = f"{p_smh:.1f} USD" if p_smh else "休市"
+
+    # 💡【v2 防呆】任一持股報價缺失時，市值與偏離百分比都是失真的
+    # （例如全斷線時顯示「NT$ 0 元、偏離 -40%」），直接改為斷線報告
+    if not (p_00713 and p_voo and p_smh):
+        missing_list = [n for n, p in [("00713", p_00713), ("VOO", p_voo), ("SMH", p_smh)] if not p]
+        return (
+            f"📊 【unclelee 資產再平衡決策哨兵】\n"
+            f"⚪ 報價斷線：{('、'.join(missing_list))} 無法取得\n"
+            f"今日市值與偏離度失真，暫停再平衡研判。請查 Actions log 確認資料源狀態。\n"
+        )
 
     report = (
         f"📊 【unclelee 資產再平衡決策哨兵】\n"
