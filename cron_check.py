@@ -153,29 +153,56 @@ def get_recession_prob_from_fred():
         return None, None
 
 def fetch_shiller_cape_real():
+    """💡【2026-07 重寫】multpl 改版曾使字串切割解析失效（誤抓到 span 標籤文字）。
+    改用三層「結構無關」策略，不依賴特定 HTML 標記：
+    1. meta description（SEO 文案 'Current Shiller PE Ratio is 41.60'，最不易變動）
+    2. id="current" 區塊後 500 字內掃描第一個合理範圍的小數
+    3. 'Shiller PE Ratio' 字樣鄰近掃描
+    所有候選值須通過 3~80 的合理範圍檢查，杜絕再次抓到雜訊。"""
     url = "https://www.multpl.com/shiller-pe"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     try:
         response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code == 200:
-            html = response.text
-            if 'id="current"' in html:
-                part = html.split('id="current"')[1].split('</div')[0]
-                if '<b>' in part:
-                    val_str = part.split('<b>')[1].split('</b>')[0].strip()
-                    return float(val_str)
-            match = re.search(r'id="current"[^>]*>\s*([\d\.]+)', html)
-            if match:
-                return float(match.group(1))
-        print(f"⚠️ multpl CAPE 頁面回應異常: HTTP {response.status_code}")
+        if response.status_code != 200:
+            print(f"⚠️ multpl CAPE 頁面回應異常: HTTP {response.status_code}")
+            return None
+        html = response.text
+
+        # 路徑 1：meta description
+        m = re.search(r'Current Shiller PE Ratio is\s*([\d]{1,3}\.\d{1,2})', html)
+        if m:
+            v = float(m.group(1))
+            if 3 <= v <= 80:
+                return v
+
+        # 路徑 2：id="current" 區塊掃描
+        seg = re.search(r'id="current"(.{0,500})', html, re.S)
+        if seg:
+            for cand in re.findall(r'([\d]{1,3}\.\d{1,2})', seg.group(1)):
+                v = float(cand)
+                if 3 <= v <= 80:
+                    return v
+
+        # 路徑 3：標題文字鄰近掃描
+        seg = re.search(r'Shiller PE Ratio(.{0,200})', html, re.S)
+        if seg:
+            for cand in re.findall(r'([\d]{1,3}\.\d{1,2})', seg.group(1)):
+                v = float(cand)
+                if 3 <= v <= 80:
+                    return v
+
+        print("⚠️ multpl CAPE 頁面結構再度變更，三層解析路徑均未命中")
         return None
     except Exception as e:
         print(f"❌ 席勒 CAPE 抓取異常: {e}")
         return None
 
 def fetch_shiller_cape_history(max_months=180):
+    """💡【2026-07 重寫】不再依賴 class="right" 等特定標記，改用「日期-數值配對」：
+    尋找 'Jul 2, 2026' 這類日期後 120 字內的第一個合理範圍小數。
+    網站怎麼改表格標記都不影響。回傳序列為新到舊（[0] 即當前月份值）。"""
     url = "https://www.multpl.com/shiller-pe/table/by-month"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -185,10 +212,16 @@ def fetch_shiller_cape_history(max_months=180):
         if response.status_code != 200:
             print(f"⚠️ multpl CAPE 歷史表回應異常: HTTP {response.status_code}")
             return None
-        values = re.findall(r'class="right">\s*([\d]+\.?[\d]*)\s*<', response.text)
-        cape_hist = [float(v) for v in values[:max_months]]
-        if len(cape_hist) < 24:
+        pairs = re.findall(
+            r'([A-Z][a-z]{2}\s+\d{1,2},\s+\d{4})(.{0,120}?)([\d]{1,3}\.\d{1,2})',
+            response.text, re.S)
+        cape_hist = [float(v) for (_d, _gap, v) in pairs if 3 <= float(v) <= 80]
+        cape_hist = cape_hist[:max_months]
+        if len(cape_hist) < 24 and max_months >= 24:
             print(f"⚠️ CAPE 歷史序列過短（{len(cape_hist)} 筆），視為抓取失敗")
+            return None
+        if not cape_hist:
+            print("⚠️ CAPE 歷史表解析 0 筆，頁面結構可能再度變更")
             return None
         return cape_hist
     except Exception as e:
