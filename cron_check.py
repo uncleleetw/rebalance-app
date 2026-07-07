@@ -21,6 +21,11 @@ BASELINE_FILE = "historical_baseline.json"
 RISK_HISTORY_FILE = "risk_history.json"
 CONFIG_PATH = "config.json"
 
+# 💡【計分紀元】方案B全天候計分上線日。此前的記錄使用舊計分口徑（0~2分時代，
+#   且含全斷線日的失真0分），與現行口徑不可比——一律不參與趨勢計算，
+#   並在下次存檔時自動清出，讓7日/30日均線從乾淨的同口徑資料重新累積。
+SCORE_EPOCH = "2026-07-07"
+
 # ⚠️【需人工年度維護】S&P500 近四季 EPS，僅作為 SPY info 抓不到 PE 時的備援分母
 #    最後更新：2026-07（由主任親自校正至 2026 年最新盈餘基準 280.0）
 SP500_EPS_TTM = 280.0
@@ -213,9 +218,36 @@ def fetch_cape_history_github(max_months=180):
         print(f"❌ GitHub Shiller 資料集抓取異常: {e}")
         return None
 
+def fetch_cape_from_nasdaq():
+    """💡 當前 CAPE 最高優先來源：Nasdaq Data Link 官方 API（正規管道，無爬蟲風險）。
+    需在 GitHub Secrets 設定 NASDAQ_API_KEY（免費註冊取得）；未設定時靜默跳過，
+    由 multpl 雙路徑接手，完全不影響既有流程。"""
+    api_key = os.environ.get("NASDAQ_API_KEY")
+    if not api_key:
+        return None
+    url = f"https://data.nasdaq.com/api/v3/datasets/MULTPL/SHILLER_PE_RATIO_MONTH.json?rows=1&api_key={api_key}"
+    try:
+        r = requests.get(url, timeout=15)
+        if r.status_code != 200:
+            print(f"⚠️ Nasdaq CAPE API 回應異常: HTTP {r.status_code}（請檢查 API key 是否有效）")
+            return None
+        rows = r.json().get("dataset", {}).get("data", [])
+        if rows and len(rows[0]) >= 2:
+            d, v = rows[0][0], float(rows[0][1])
+            print(f"📌 當前 CAPE 取自 Nasdaq Data Link API: {v:.2f}（資料月份 {d}）")
+            return v
+        print("⚠️ Nasdaq CAPE API 回傳格式異常")
+        return None
+    except Exception as e:
+        print(f"❌ Nasdaq CAPE API 抓取異常: {e}")
+        return None
+
 def fetch_cape_current():
-    """當前 CAPE 雙路徑：multpl 主頁 → multpl 歷史表首筆（同站第二路徑，
-    首列即本月值）。兩者都失敗則回 None，由持久化值接手。"""
+    """當前 CAPE 三路徑：Nasdaq 官方 API → multpl 主頁 → multpl 歷史表首筆。
+    全數失敗則回 None，由 config 持久化值接手。"""
+    val = fetch_cape_from_nasdaq()
+    if val is not None:
+        return val
     val = fetch_shiller_cape_real()
     if val is not None:
         return val
@@ -718,7 +750,8 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         rh_data = {"records": []}
         if os.path.exists(RISK_HISTORY_FILE):
             with open(RISK_HISTORY_FILE, "r", encoding="utf-8") as f: rh_data = json.load(f)
-        past_records = [r for r in rh_data.get("records", []) if r.get("date") != today_str]
+        past_records = [r for r in rh_data.get("records", [])
+                        if r.get("date") != today_str and r.get("date", "") >= SCORE_EPOCH]
 
         if data_fuse_tripped:
             # 斷線日：今日分數失真，不寫入、不做日對日比較，
