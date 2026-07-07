@@ -15,6 +15,8 @@ TW_TZ = ZoneInfo("Asia/Taipei")
 
 BASELINE_W5000 = 75000.0
 BASELINE_BUFFETT_PCT = 225.0
+# 💡 巴菲特指標已內建 GDP 自我校正：首次取得 FRED GDP 時錨定基準存入 config
+#   （buffett_baseline_gdp），之後 GDP 成長自動抵銷，上面兩個常數永不過時
 BASELINE_FILE = "historical_baseline.json"
 RISK_HISTORY_FILE = "risk_history.json"
 CONFIG_PATH = "config.json"
@@ -50,6 +52,36 @@ def get_series_last_date(series):
         return datetime.datetime.strptime(str(idx), "%Y-%m-%d").date()
     except Exception:
         return None
+
+def get_trend_regime(series):
+    """💡【長線戰略層】200日均線趨勢格局判定——長線投資最經典的格局濾網。
+    收盤在200日線上方且均線上彎＝多頭格局；下方且下彎＝空頭格局；其餘＝轉換中。
+    回傳 dict 或 None（資料不足）。"""
+    if series is None or len(series) < 210:
+        return None
+    try:
+        close = float(series.iloc[-1])
+        ma200 = series.rolling(200).mean()
+        ma_now = float(ma200.iloc[-1])
+        ma_prev = float(ma200.iloc[-21])  # 約一個月前的均線位置，判斜率
+        above_pct = (close - ma_now) / ma_now * 100
+        if ma_now > ma_prev * 1.001: slope = "上彎"
+        elif ma_now < ma_prev * 0.999: slope = "下彎"
+        else: slope = "走平"
+        if close >= ma_now and slope == "上彎":
+            regime = "🟢 多頭格局"
+        elif close < ma_now and slope == "下彎":
+            regime = "🔴 空頭格局"
+        else:
+            regime = "🟡 格局轉換中"
+        return {"regime": regime, "above_pct": above_pct, "slope": slope}
+    except Exception as e:
+        print(f"⚠️ 趨勢格局計算失敗: {e}")
+        return None
+
+def format_regime(r):
+    if r is None: return "資料不足 ⏳"
+    return f"{r['regime']} (距200日線 {r['above_pct']:+.1f}%｜均線{r['slope']})"
 
 def yf_close_series(ticker, period):
     try:
@@ -158,6 +190,41 @@ def fetch_shiller_cape_history(max_months=180):
         print(f"❌ 席勒 CAPE 歷史抓取異常: {e}")
         return None
 
+def fetch_cape_history_github(max_months=180):
+    """💡 CAPE 歷史序列首選來源：GitHub 公開 Shiller 資料集
+    （raw.githubusercontent.com，Actions 對 GitHub 域名必通、無 Cloudflare）。
+    注意：其 PE10 欄位因盈餘發布延遲，最新有效值約落後 2~3 年，
+    因此只用於歷史百分位分布（慢速估值指標的分布足夠穩定），不作為當前值來源。"""
+    url = "https://raw.githubusercontent.com/datasets/s-and-p-500/main/data/data.csv"
+    try:
+        import io, csv as _csv
+        r = requests.get(url, timeout=20)
+        if r.status_code != 200:
+            print(f"⚠️ GitHub Shiller 資料集回應異常: HTTP {r.status_code}")
+            return None
+        rows = list(_csv.DictReader(io.StringIO(r.text)))
+        vals = [float(row["PE10"]) for row in rows if row.get("PE10") and float(row["PE10"]) > 0]
+        if len(vals) < 24:
+            print(f"⚠️ GitHub Shiller PE10 有效筆數過少（{len(vals)}）")
+            return None
+        print(f"📌 CAPE 歷史序列取自 GitHub Shiller 資料集（共 {len(vals)} 筆，取近 {max_months} 筆）")
+        return vals[-max_months:]
+    except Exception as e:
+        print(f"❌ GitHub Shiller 資料集抓取異常: {e}")
+        return None
+
+def fetch_cape_current():
+    """當前 CAPE 雙路徑：multpl 主頁 → multpl 歷史表首筆（同站第二路徑，
+    首列即本月值）。兩者都失敗則回 None，由持久化值接手。"""
+    val = fetch_shiller_cape_real()
+    if val is not None:
+        return val
+    hist = fetch_shiller_cape_history(max_months=3)
+    if hist:
+        print(f"📌 當前 CAPE 改用 multpl 歷史表首筆: {hist[0]:.1f}")
+        return hist[0]
+    return None
+
 def calculate_metrics_summary(data_list):
     if not data_list: return None
     arr = np.array(data_list)
@@ -210,13 +277,40 @@ def update_historical_baseline():
     else:
         baseline_data["tw_bias"] = None
 
-    cape_hist = fetch_shiller_cape_history()
+    # CAPE 歷史：GitHub Shiller 資料集首選（Actions 必通），multpl 表格備援
+    cape_hist = fetch_cape_history_github() or fetch_shiller_cape_history()
     baseline_data["shiller_cape"] = calculate_metrics_summary(cape_hist) if cape_hist else None
 
     w5000_close = yf_close_series("^W5000", "15y")
     if w5000_close is not None:
         try:
             buffett_series = (w5000_close / BASELINE_W5000) * BASELINE_BUFFETT_PCT
+            # 💡【GDP 校正】歷史序列以「基準GDP / 各時點GDP」逐日校正，
+            # 消除「假設GDP不變導致過去指標被高估」的結構性偏差
+            gdp_full = fred_series("GDP", tail_n=120)
+            if gdp_full is not None:
+                base_gdp = None
+                try:
+                    if os.path.exists(CONFIG_PATH):
+                        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                            base_gdp = json.load(f).get("buffett_baseline_gdp")
+                except Exception:
+                    pass
+                gdp_ts = gdp_full.copy()
+                gdp_ts.index = pd.to_datetime(gdp_ts.index)
+                if base_gdp is None:
+                    base_gdp = float(gdp_ts.iloc[-1])
+                w_idx = buffett_series.index
+                try:
+                    w_idx = w_idx.tz_localize(None)
+                except (TypeError, AttributeError):
+                    pass
+                buffett_series.index = w_idx
+                gdp_aligned = gdp_ts.reindex(w_idx, method='ffill')
+                buffett_series = (buffett_series * (float(base_gdp) / gdp_aligned)).dropna()
+                print("📌 巴菲特歷史基準已完成 GDP 逐日校正")
+            else:
+                print("⚠️ FRED GDP 不可用，巴菲特歷史基準未做 GDP 校正（沿用固定比例）")
             baseline_data["buffett_indicator"] = calculate_metrics_summary(buffett_series.dropna().tolist())
         except Exception as e:
             print(f"❌ 巴菲特指標歷史計算失敗: {e}")
@@ -400,7 +494,7 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     else:
         data['twd_fx'], data['twd_bias_pct'], data['twd_arrow'] = None, None, "⏳"
 
-    twii_series = shared_or_fetch("^TWII", "50d")
+    twii_series = shared_or_fetch("^TWII", "400d")
     if twii_series is not None and len(twii_series) >= 20:
         check_freshness("台股指數", twii_series)
         current_twii = twii_series.iloc[-1]
@@ -412,13 +506,35 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
 
     w5000_series = shared_or_fetch("^W5000", "10d")
     if w5000_series is not None:
-        data['buffett_indicator'] = round(BASELINE_BUFFETT_PCT * (float(w5000_series.iloc[-1]) / BASELINE_W5000), 1)
+        # 💡【GDP 校正】首次成功取得 FRED GDP 時自動錨定為基準（factor 起始為 1.0），
+        # 之後 GDP 每成長一分，指標自動除回一分——結構性漂移歸零，常數永不過時
+        gdp_factor = 1.0
+        gdp_series = fred_series("GDP", 8)
+        if gdp_series is not None:
+            latest_gdp = float(gdp_series.iloc[-1])
+            base_gdp = config_data.get("buffett_baseline_gdp")
+            if not base_gdp:
+                safe_save_config_field("buffett_baseline_gdp", latest_gdp)
+                base_gdp = latest_gdp
+                print(f"📌 巴菲特 GDP 基準完成自我錨定: {latest_gdp:,.0f}（十億美元）")
+            gdp_factor = float(base_gdp) / latest_gdp
+        else:
+            print("⚠️ FRED GDP 取得失敗，本日巴菲特指標未做 GDP 校正")
+        data['buffett_indicator'] = round(BASELINE_BUFFETT_PCT * (float(w5000_series.iloc[-1]) / BASELINE_W5000) * gdp_factor, 1)
         safe_save_config_field("buffett_indicator_manual", data['buffett_indicator'])
         safe_save_config_field("buffett_indicator_last_updated", today_str)
     else:
         data['buffett_indicator'] = load_persisted_value("buffett_indicator_manual", "buffett_indicator_last_updated", 45)
         if data['buffett_indicator'] is not None:
             print("📌 巴菲特指標使用 config 持久化值（45天內有效）")
+
+    # =========================================================================
+    # 🧭【長線戰略層】200日均線趨勢格局（美股 / 台股）
+    # 共享下載已改為400天，直接就地計算；純顯示，不參與計分
+    # =========================================================================
+    gspc_series = shared_or_fetch("^GSPC", "400d")
+    us_regime = get_trend_regime(gspc_series)
+    tw_regime = get_trend_regime(twii_series)
 
     # =========================================================================
     # ⚙️ 核心調度：追蹤機制狀態初始化與判定邏輯
@@ -445,7 +561,7 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
 
     # --- 執行常態月度長檢 (1號當天) ---
     if is_monthly_check:
-        cape_val = fetch_shiller_cape_real()
+        cape_val = fetch_cape_current()
         data['shiller_cape'] = cape_val
         pending_status["shiller_cape"] = (cape_val is None)
         if cape_val is not None:
@@ -468,7 +584,7 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     # --- 每日補抓執行邏輯 (平日追蹤偵測) ---
     else:
         if pending_status.get("shiller_cape", False):
-            cape_retry = fetch_shiller_cape_real()
+            cape_retry = fetch_cape_current()
             if cape_retry is not None:
                 data['shiller_cape'] = cape_retry
                 persist_cape(cape_retry)
@@ -561,15 +677,15 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     total_score = vix_score + pe_score + yield_score + hy_score + twd_score + tw_score
 
     n_monthly_scored = 0
-    
+
     if data.get('shiller_cape') is not None:
         total_score += 0 if data['shiller_cape'] < 25 else (1 if data['shiller_cape'] < 32 else (2 if data['shiller_cape'] < 40 else 3))
         n_monthly_scored += 1
-        
+
     if data.get('buffett_indicator') is not None:
         total_score += 0 if data['buffett_indicator'] < 100 else (1 if data['buffett_indicator'] < 150 else (2 if data['buffett_indicator'] < 200 else 3))
         n_monthly_scored += 1
-            
+
     if recession_for_scoring is not None:
         total_score += 0 if recession_for_scoring < 15 else (1 if recession_for_scoring < 30 else (2 if recession_for_scoring < 50 else 3))
         n_monthly_scored += 1
@@ -593,15 +709,23 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     if data_fuse_tripped:
         status_light = f"⚪ 【數據斷線 {missing_count}/6】指標多數無法取得，燈號暫停研判——今日勿依系統加減碼，請查 Actions log"
 
+    # =========================================================================
+    # 📉 風險軌跡儲存 ＋ 💡【長線戰略層】分數趨勢計算（近7日均 vs 近30日均）
+    # =========================================================================
     yesterday_score_text = "🔄 啟動"
-    if data_fuse_tripped:
-        yesterday_score_text = "⚪ 斷線日不記錄"
-    else:
-        try:
-            rh_data = {"records": []}
-            if os.path.exists(RISK_HISTORY_FILE):
-                with open(RISK_HISTORY_FILE, "r", encoding="utf-8") as f: rh_data = json.load(f)
-            past_records = [r for r in rh_data.get("records", []) if r.get("date") != today_str]
+    score_trend_txt = "樣本累積中（需至少7個交易日）"
+    try:
+        rh_data = {"records": []}
+        if os.path.exists(RISK_HISTORY_FILE):
+            with open(RISK_HISTORY_FILE, "r", encoding="utf-8") as f: rh_data = json.load(f)
+        past_records = [r for r in rh_data.get("records", []) if r.get("date") != today_str]
+
+        if data_fuse_tripped:
+            # 斷線日：今日分數失真，不寫入、不做日對日比較，
+            # 但趨勢來自過去記錄，仍然有效，照常計算顯示
+            yesterday_score_text = "⚪ 斷線日不記錄"
+            trend_scores = [r["total_score"] for r in past_records]
+        else:
             if past_records:
                 prev_score = past_records[-1]["total_score"]
                 diff = total_score - prev_score
@@ -612,8 +736,19 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
             past_records.append({"date": today_str, "total_score": total_score})
             rh_data["records"] = past_records[-90:]
             with open(RISK_HISTORY_FILE, "w", encoding="utf-8") as f: json.dump(rh_data, f, indent=2)
-        except Exception as e:
-            print(f"⚠️ 風險軌跡檔讀寫失敗: {e}")
+            trend_scores = [r["total_score"] for r in past_records]
+
+        # 💡【長線戰略層】分數趨勢：近7日均 vs 近30日均，看風險水位的方向而非單日跳動
+        if len(trend_scores) >= 7:
+            avg7 = sum(trend_scores[-7:]) / len(trend_scores[-7:])
+            avg30 = sum(trend_scores[-30:]) / len(trend_scores[-30:])
+            gap = avg7 - avg30
+            if gap > 0.5: trend_word = "風險升溫中 🔺"
+            elif gap < -0.5: trend_word = "風險消退中 🔻"
+            else: trend_word = "風險水位平穩 ➡️"
+            score_trend_txt = f"近7日均 {avg7:.1f} vs 近30日均 {avg30:.1f} → {trend_word}"
+    except Exception as e:
+        print(f"⚠️ 風險軌跡檔讀寫失敗: {e}")
 
     situation_msg = get_situation_assessment(data, vix_l, yield_l, hy_l, twd_l, tw_l, pe_l)
 
@@ -628,6 +763,16 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
     twd_txt = f"{data['twd_fx']:.2f} ({data['twd_bias_pct']:+.1f}%) {data['twd_arrow']}" if data.get('twd_bias_pct') is not None else "延遲 ⏳"
     tw_txt = f"{data['tw_bias']:.1f}% {data['tw_bias_arrow']} (歷史百分位: {p_bias})" if data.get('tw_bias') is not None else "延遲 ⏳"
 
+    # 長檢估值精簡行
+    lc_parts = []
+    if data.get('shiller_cape') is not None: lc_parts.append(f"CAPE {data['shiller_cape']:.1f}倍")
+    if data.get('buffett_indicator') is not None: lc_parts.append(f"巴菲特 {data['buffett_indicator']:.0f}%")
+    if recession_for_scoring is not None: lc_parts.append(f"衰退率 {recession_for_scoring:.1f}%")
+    lc_txt = " | ".join(lc_parts) if lc_parts else "暫無有效數據 ⏳"
+
+    # =========================================================================
+    # 📋 兩層式報告組裝：先戰略（長線決策依據）、後防護（短線警報器）
+    # =========================================================================
     report = (
         f"🚨 【unclelee 總經加權風控塔台】\n"
         f"⏰ {taiwan_time.strftime('%m-%d %H:%M')} | 📉 軌跡: {yesterday_score_text}\n"
@@ -635,25 +780,21 @@ def get_risk_control_report(df, baseline_brain, taiwan_time, is_monthly_check):
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
         f"{situation_msg}\n"
         f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-        f"📊 【每日核心量化指標體檢】\n"
+        f"🧭 【長線戰略層】槓桿部署與大方向依據\n"
+        f"• 美股趨勢格局 : {format_regime(us_regime)}\n"
+        f"• 台股趨勢格局 : {format_regime(tw_regime)}\n"
+        f"• 10Y-2Y美債利 : {yield_txt} | 風險: {yield_l}\n"
+        f"• 長檢估值({n_monthly_scored}/3) : {lc_txt}\n"
+        f"• 風險分數趨勢 : {score_trend_txt}\n"
+        f"   總分 {total_score}｜門檻 🟡{yellow_threshold} 🟠{orange_threshold} 🔴{red_threshold}\n"
+        f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
+        f"⚡ 【短線防護層】維持率保衛與時機偵測\n"
         f"• VIX 恐慌指數 : {vix_txt} | 風險: {vix_l}\n"
         f"• S&P500本益比 : {pe_txt} | 風險: {pe_l}\n"
-        f"• 10Y-2Y美債利 : {yield_txt} | 風險: {yield_l}\n"
         f"• 高收益債動能 : {hy_txt} | 風險: {hy_l}\n"
         f"• 台幣匯率偏離 : {twd_txt} | 風險: {twd_l}\n"
         f"• 台股20日乖離 : {tw_txt} | 風險: {tw_l}\n"
     )
-
-    if not is_monthly_check and n_monthly_scored > 0:
-        lc_parts = []
-        if data.get('shiller_cape') is not None: lc_parts.append(f"CAPE {data['shiller_cape']:.1f}倍")
-        if data.get('buffett_indicator') is not None: lc_parts.append(f"巴菲特 {data['buffett_indicator']:.0f}%")
-        if recession_for_scoring is not None: lc_parts.append(f"衰退率 {recession_for_scoring:.1f}%")
-        report += (
-            f"⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯\n"
-            f"📐 【長檢計分 {n_monthly_scored}/3】" + " | ".join(lc_parts) + "\n"
-            f"   總分 {total_score}｜門檻 🟡{yellow_threshold} 🟠{orange_threshold} 🔴{red_threshold}\n"
-        )
 
     if stale_notes:
         report += (
@@ -836,8 +977,18 @@ def main():
 
     shared_df = None
     try:
+        # 💡【長線戰略層】下載窗口 50d → 400d，供 200 日均線趨勢格局計算
         tickers = ["^VIX", "SPY", "^GSPC", "HYG", "TWD=X", "^TWII", "00713.TW", "VOO", "SMH", "^W5000"]
-        shared_df = yf.download(tickers, period="50d", progress=False)
+        shared_df = yf.download(tickers, period="400d", progress=False)
+        # 💡【防禦】若 yfinance 未來將預設 group_by 改為 'ticker'（層級順序顛倒成
+        # (SPY, Close)），df.get('Close') 會拿到 None、共享機制靜默退化為逐一補抓。
+        # 偵測到顛倒時就地交換層級，維持 (Close, ticker) 結構。
+        if shared_df is not None and isinstance(shared_df.columns, pd.MultiIndex):
+            lv0 = shared_df.columns.get_level_values(0)
+            lv_last = shared_df.columns.get_level_values(-1)
+            if 'Close' not in lv0 and 'Close' in lv_last:
+                shared_df = shared_df.swaplevel(axis=1)
+                print("📌 偵測到 yfinance 欄位層級顛倒，已自動交換為 (Close, ticker) 結構")
         if shared_df is None or shared_df.empty or 'Close' not in shared_df: shared_df = None
     except Exception as e:
         print(f"⚠️ 共享行情下載失敗，各指標將自行補抓: {e}")
