@@ -6,11 +6,11 @@
     "recession_probability_last_updated": "2026-06-01",
     "pending_monthly_checks": {
         "shiller_cape": false,
-        "recession_prob": false
+        "recession_prob": true
     },
     "buffett_indicator_manual": 226.8,
-    "buffett_indicator_last_updated": "2026-08-31",
+    "buffett_indicator_last_updated": "2026-09-01",
     "buffett_baseline_gdp": 31865.721,
-    "shiller_cape_manual": 40.91,
-    "shiller_cape_last_updated": "2026-08-01"
+    "shiller_cape_manual": 42.04,
+    "shiller_cape_last_updated": "2026-09-01"
 }
