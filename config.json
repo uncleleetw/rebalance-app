@@ -2,14 +2,14 @@
     "shares_00713": 10500,
     "shares_voo": 28,
     "shares_smh": 15,
-    "recession_probability_manual": 0.76,
-    "recession_probability_last_updated": "2026-07-01",
+    "recession_probability_manual": 0.62,
+    "recession_probability_last_updated": "2026-08-01",
     "pending_monthly_checks": {
         "shiller_cape": false,
-        "recession_prob": true
+        "recession_prob": false
     },
-    "buffett_indicator_manual": 223.2,
-    "buffett_indicator_last_updated": "2026-10-01",
+    "buffett_indicator_manual": 223.7,
+    "buffett_indicator_last_updated": "2026-10-02",
     "buffett_baseline_gdp": 31865.721,
     "shiller_cape_manual": 41.0,
     "shiller_cape_last_updated": "2026-10-01"
