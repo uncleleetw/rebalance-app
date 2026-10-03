@@ -8,8 +8,8 @@
         "shiller_cape": false,
         "recession_prob": false
     },
-    "buffett_indicator_manual": 223.7,
-    "buffett_indicator_last_updated": "2026-10-02",
+    "buffett_indicator_manual": 225.4,
+    "buffett_indicator_last_updated": "2026-10-03",
     "buffett_baseline_gdp": 31865.721,
     "shiller_cape_manual": 41.0,
     "shiller_cape_last_updated": "2026-10-01"
