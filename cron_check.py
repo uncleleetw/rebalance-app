@@ -1064,6 +1064,15 @@ def main():
     rebalance_report = get_rebalance_report(shared_df)
 
     combined_report = f"{risk_report}\n\n═══════════════════════════\n\n{rebalance_report}"
+
+    # 🤖 AI 解讀（第 1 層升級）：失敗或未設定 API Key 時自動略過，不影響原本推播
+    try:
+        from ai_commentary import get_ai_commentary, append_commentary, load_score_history
+        commentary = get_ai_commentary(combined_report, load_score_history(RISK_HISTORY_FILE))
+        combined_report = append_commentary(combined_report, commentary)
+    except Exception as e:
+        print(f"⚠️ AI 解讀模組異常，略過: {e}")
+
     print(combined_report)
     send_line_message(combined_report)
 
