@@ -53,6 +53,7 @@ def get_ai_commentary(report_text, score_history="", timeout=60):
     if not api_key:
         print("[AI解讀] 未設定 ANTHROPIC_API_KEY，略過")
         return None
+    print(f"[AI解讀] 呼叫 Claude（{DEFAULT_MODEL}）…")
 
     content = f"以下是今天的風控塔台報告：\n\n{report_text}"
     if score_history:
@@ -60,7 +61,7 @@ def get_ai_commentary(report_text, score_history="", timeout=60):
 
     body = {
         "model": DEFAULT_MODEL,
-        "max_tokens": 800,
+        "max_tokens": 4000,
         "system": SYSTEM_PROMPT,
         "messages": [{"role": "user", "content": content}],
     }
@@ -76,9 +77,16 @@ def get_ai_commentary(report_text, score_history="", timeout=60):
             print(f"[AI解讀] HTTP {resp.status_code} | {resp.text[:200]}，略過")
             return None
         data = resp.json()
-        text = "".join(b.get("text", "") for b in data.get("content", [])
+        blocks = data.get("content", [])
+        text = "".join(b.get("text", "") for b in blocks
                        if b.get("type") == "text").strip()
-        return text or None
+        if not text:
+            print(f"[AI解讀] 回應沒有文字內容，略過｜模型 {data.get('model')}｜"
+                  f"stop_reason={data.get('stop_reason')}｜"
+                  f"區塊={[b.get('type') for b in blocks]}")
+            return None
+        print(f"[AI解讀] 成功｜模型 {data.get('model')}｜{len(text)} 字")
+        return text
     except Exception as e:  # 失敗安全：不讓 AI 這一步拖垮通知
         print(f"[AI解讀] 呼叫失敗，略過：{e}")
         return None
