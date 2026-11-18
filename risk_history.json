@@ -1,10 +1,6 @@
 {
   "records": [
     {
-      "date": "2026-08-20",
-      "total_score": 6
-    },
-    {
       "date": "2026-08-21",
       "total_score": 6
     },
@@ -359,6 +355,10 @@
     {
       "date": "2026-11-17",
       "total_score": 11
+    },
+    {
+      "date": "2026-11-18",
+      "total_score": 9
     }
   ]
 }
